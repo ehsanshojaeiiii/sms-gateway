@@ -7,6 +7,6 @@
 **/.env
 configs/.env
 arvancloud_software_developer_challenge.pdf
-api
-worker
+/api
+/worker
 demo
