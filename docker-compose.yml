@@ -1,0 +1,79 @@
+# Modern Docker Compose for SMS Gateway
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sms_gateway
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  nats:
+    image: nats:2-alpine
+    ports:
+      - "4222:4222"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4222"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - POSTGRES_URL=postgres://postgres:password@postgres:5432/sms_gateway?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - NATS_URL=nats://nats:4222
+      - PRICE_PER_PART_CENTS=5
+      - RATE_LIMIT_RPS=100
+      - LOG_LEVEL=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    environment:
+      - POSTGRES_URL=postgres://postgres:password@postgres:5432/sms_gateway?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - NATS_URL=nats://nats:4222
+      - LOG_LEVEL=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
