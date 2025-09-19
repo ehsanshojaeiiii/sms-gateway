@@ -295,7 +295,7 @@ CREATE TABLE idempotency_keys (
 
 **Application:**
 - Structured logging with sampling
-- Prometheus metrics collection
+  
 - Graceful shutdown handling
 
 ## Reliability & Fault Tolerance
@@ -355,7 +355,8 @@ CREATE TABLE idempotency_keys (
 
 ## Observability
 
-### Metrics (Prometheus)
+### Metrics
+Not included.
 - **Business Metrics**: Message throughput, delivery rates
 - **Technical Metrics**: Response times, error rates
 - **Infrastructure Metrics**: CPU, memory, connection pools

@@ -11,7 +11,7 @@ A production-grade SMS Gateway built for high throughput and reliability, capabl
 - **Rate limiting** per client with token bucket algorithm  
 - **Idempotency** support for reliable message handling
 - **Horizontal scalability** with multiple worker instances
-- **Observability** with metrics, structured logging, and health checks
+- **Observability** with structured logging and health checks
 - **Docker-first** deployment with docker-compose
 
 ## Quick Start
@@ -246,13 +246,7 @@ make migrate-down
 - **Caching**: Redis for rate limiting and idempotency
 
 ## Monitoring
-
-### Metrics (Prometheus)
-- `http_requests_total` - HTTP request counter
-- `http_request_duration_seconds` - Request duration histogram  
-- `messages_processed_total` - Message processing counter
-- `credit_operations_total` - Credit operation counter
-- `retry_attempts_total` - Retry attempt counter
+Metrics endpoint not included.
 
 ### Health Checks
 - `/healthz` - Basic health (always returns 200 if service is up)
@@ -309,7 +303,6 @@ make logs-worker    # Worker service only
 make shell-postgres # PostgreSQL shell
 make shell-redis    # Redis shell
 make health         # Quick health check
-make metrics        # View metrics
 ```
 
 ## License

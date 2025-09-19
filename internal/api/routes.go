@@ -1,14 +1,15 @@
 package api
 
 import (
-    "sms-gateway/internal/auth"
-    "sms-gateway/internal/observability"
-    "sms-gateway/internal/rate"
+	"sms-gateway/internal/auth"
+	"sms-gateway/internal/observability"
+	"sms-gateway/internal/rate"
 
-    "github.com/gofiber/fiber/v2"
-    fiberSwagger "github.com/swaggo/fiber-swagger"
-    "go.uber.org/zap"
-    _ "sms-gateway/docs"
+	_ "sms-gateway/docs"
+
+	"github.com/gofiber/fiber/v2"
+	fiberSwagger "github.com/swaggo/fiber-swagger"
+	"go.uber.org/zap"
 )
 
 func SetupRoutes(
@@ -48,8 +49,8 @@ func SetupRoutes(
 		})
 	})
 
-    // Swagger UI - library middleware (served from generated docs package)
-    app.Get("/swagger/*", fiberSwagger.WrapHandler)
+	// Swagger UI - library middleware (served from generated docs package)
+	app.Get("/swagger/*", fiberSwagger.WrapHandler)
 
 	// OpenAPI spec endpoint
 	app.Get("/api-spec", func(c *fiber.Ctx) error {
@@ -252,7 +253,7 @@ func SetupRoutes(
 		return c.JSON(spec)
 	})
 
-    // Metrics endpoint removed (Prometheus disabled)
+	// Metrics endpoint removed (Prometheus disabled)
 
 	// API v1 routes
 	v1 := app.Group("/v1")
