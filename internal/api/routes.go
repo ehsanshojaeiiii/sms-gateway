@@ -49,12 +49,10 @@ func SetupRoutes(
 		})
 	})
 
-	// Swagger UI endpoint - Clean approach
-	app.Get("/swagger", func(c *fiber.Ctx) error {
-		// Redirect to Swagger Editor with our API spec
-		return c.Redirect("https://editor.swagger.io/?url=" +
-			c.Protocol() + "://" + c.Hostname() + ":" + c.Port() + "/api-spec")
-	})
+    // Swagger UI endpoint - serve local static UI
+    app.Get("/swagger", func(c *fiber.Ctx) error {
+        return c.SendFile("static/swagger/index.html")
+    })
 
 	// OpenAPI spec endpoint
 	app.Get("/api-spec", func(c *fiber.Ctx) error {
@@ -81,7 +79,7 @@ func SetupRoutes(
 					},
 				},
 			},
-			"paths": map[string]interface{}{
+            "paths": map[string]interface{}{
 				"/healthz": map[string]interface{}{
 					"get": map[string]interface{}{
 						"summary":     "Health Check",
@@ -102,6 +100,16 @@ func SetupRoutes(
 						},
 					},
 				},
+                "/readyz": map[string]interface{}{
+                    "get": map[string]interface{}{
+                        "summary":     "Readiness Check",
+                        "description": "Readiness probe",
+                        "tags":        []string{"Health"},
+                        "responses": map[string]interface{}{
+                            "200": map[string]interface{}{"description": "Ready"},
+                        },
+                    },
+                },
 				"/v1/me": map[string]interface{}{
 					"get": map[string]interface{}{
 						"summary":     "Get Client Info",
@@ -130,6 +138,15 @@ func SetupRoutes(
 						"description": "Send SMS message with optional idempotency key",
 						"tags":        []string{"Messages"},
 						"security":    []map[string]interface{}{{"ApiKeyAuth": []string{}}},
+                        "parameters": []map[string]interface{}{
+                            {
+                                "name":        "Idempotency-Key",
+                                "in":          "header",
+                                "description": "Optional idempotency key to prevent duplicates",
+                                "required":    false,
+                                "schema":      map[string]interface{}{"type": "string"},
+                            },
+                        },
 						"requestBody": map[string]interface{}{
 							"required": true,
 							"content": map[string]interface{}{
@@ -159,9 +176,80 @@ func SetupRoutes(
 									},
 								},
 							},
+                            "400": map[string]interface{}{"description": "Bad Request"},
+                            "401": map[string]interface{}{"description": "Unauthorized"},
+                            "429": map[string]interface{}{"description": "Too Many Requests"},
+                            "500": map[string]interface{}{"description": "Internal Server Error"},
 						},
 					},
 				},
+                "/v1/messages/{id}": map[string]interface{}{
+                    "get": map[string]interface{}{
+                        "summary":     "Get Message",
+                        "description": "Get message status by ID",
+                        "tags":        []string{"Messages"},
+                        "security":    []map[string]interface{}{{"ApiKeyAuth": []string{}}},
+                        "parameters": []map[string]interface{}{
+                            {
+                                "name":     "id",
+                                "in":       "path",
+                                "required": true,
+                                "schema":   map[string]interface{}{"type": "string", "format": "uuid"},
+                            },
+                        },
+                        "responses": map[string]interface{}{
+                            "200": map[string]interface{}{
+                                "description": "OK",
+                                "content": map[string]interface{}{
+                                    "application/json": map[string]interface{}{
+                                        "example": map[string]interface{}{
+                                            "id":             "uuid-here",
+                                            "to":             "+1234567890",
+                                            "from":           "SENDER",
+                                            "text":           "Hello",
+                                            "status":         "SENT",
+                                            "parts":          1,
+                                            "client_reference": "order-123",
+                                        },
+                                    },
+                                },
+                            },
+                            "404": map[string]interface{}{"description": "Not Found"},
+                            "401": map[string]interface{}{"description": "Unauthorized"},
+                        },
+                    },
+                },
+                "/v1/providers/mock/dlr": map[string]interface{}{
+                    "post": map[string]interface{}{
+                        "summary":     "Mock DLR Webhook",
+                        "description": "Simulate delivery receipts from mock provider",
+                        "tags":        []string{"Providers"},
+                        "requestBody": map[string]interface{}{
+                            "required": true,
+                            "content": map[string]interface{}{
+                                "application/json": map[string]interface{}{
+                                    "schema": map[string]interface{}{
+                                        "type":       "object",
+                                        "required":   []string{"message_id", "status"},
+                                        "properties": map[string]interface{}{
+                                            "message_id": map[string]interface{}{"type": "string", "format": "uuid"},
+                                            "status":     map[string]interface{}{"type": "string", "enum": []string{"DELIVERED", "FAILED"}},
+                                            "error":      map[string]interface{}{"type": "string"},
+                                        },
+                                    },
+                                    "example": map[string]interface{}{
+                                        "message_id": "uuid-here",
+                                        "status":     "DELIVERED",
+                                    },
+                                },
+                            },
+                        },
+                        "responses": map[string]interface{}{
+                            "200": map[string]interface{}{"description": "OK"},
+                            "400": map[string]interface{}{"description": "Bad Request"},
+                        },
+                    },
+                },
 			},
 		}
 		return c.JSON(spec)
