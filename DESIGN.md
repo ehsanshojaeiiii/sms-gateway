@@ -370,7 +370,7 @@ CREATE TABLE idempotency_keys (
 - **Readiness**: Dependency health (`/readyz`)  
 - **Custom**: Database, queue, cache connectivity
 
-### Tracing (OpenTelemetry)
+### Tracing (disabled)
 - **Distributed Tracing**: Request flow across services
 - **Performance Analysis**: Bottleneck identification
 - **Dependency Mapping**: Service interaction visualization

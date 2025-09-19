@@ -127,7 +127,6 @@ GET /v1/me
 ```http
 GET /healthz   # Basic health check
 GET /readyz    # Readiness check (includes DB connectivity)
-GET /metrics   # Prometheus metrics
 ```
 
 ### Message Statuses

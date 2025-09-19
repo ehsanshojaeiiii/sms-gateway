@@ -67,7 +67,7 @@ func main() {
 	defer queue.Close()
 
 	// Initialize services
-	metrics := observability.NewMetrics()
+    metrics := observability.NewMetrics()
 	messageStore := messages.NewStore(db, logger)
 	authService := auth.NewAuthService(db, logger)
 	billingService := billing.NewBillingService(db, logger)
