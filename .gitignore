@@ -1,0 +1,12 @@
+.DS_Store
+**/.DS_Store
+**/*.log
+**/bin/
+**/dist/
+**/node_modules/
+**/.env
+configs/.env
+arvancloud_software_developer_challenge.pdf
+api
+worker
+demo
