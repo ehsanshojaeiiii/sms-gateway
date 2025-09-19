@@ -6,8 +6,14 @@ run: ## Start everything (infrastructure + services)
 	@echo "🚀 Starting SMS Gateway..."
 	@docker-compose up --build -d
 	@sleep 10
+	@$(MAKE) seed
+	@echo "✅ SMS Gateway running on http://localhost:8080"
+	@echo "🔑 Demo API Key: secret"
+
+seed: ## Seed database (tables + demo client)
 	@echo "📊 Setting up demo client..."
 	@docker-compose exec postgres psql -U postgres -d sms_gateway -c "\
+		CREATE EXTENSION IF NOT EXISTS pgcrypto; \
 		CREATE TABLE IF NOT EXISTS clients ( \
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), \
 			name text NOT NULL, \
@@ -22,14 +28,13 @@ run: ## Start everything (infrastructure + services)
 			text text NOT NULL, \
 			parts int NOT NULL DEFAULT 1, \
 			status text NOT NULL DEFAULT 'QUEUED', \
+			client_reference text NULL, \
 			created_at timestamptz NOT NULL DEFAULT now(), \
 			updated_at timestamptz NOT NULL DEFAULT now() \
 		); \
-		INSERT INTO clients (name, api_key_hash, credit_cents) \
-		VALUES ('Demo Client', '\$$2a\$$10\$$N9qo8uLOickgx2ZMRZoMye/6lrVqaOZFJl.p6pznXiKlrDVrF.6Vi', 100000) \
+		INSERT INTO clients (id, name, api_key_hash, credit_cents) \
+		VALUES ('550e8400-e29b-41d4-a716-446655440000', 'Demo Client', 'secret', 100000) \
 		ON CONFLICT (api_key_hash) DO NOTHING;" 2>/dev/null || echo "Database setup complete"
-	@echo "✅ SMS Gateway running on http://localhost:8080"
-	@echo "🔑 Demo API Key: secret"
 
 test: ## Run all tests and API tests
 	@echo "🧪 Running Go tests..."
