@@ -63,16 +63,31 @@ func (a *AuthService) CreateClient(ctx context.Context, name, apiKey string, dlr
 }
 
 func (a *AuthService) AuthenticateAPIKey(ctx context.Context, apiKey string) (*Client, error) {
-	if apiKey != "secret" {
+	if apiKey == "" {
 		return nil, fmt.Errorf("invalid API key")
 	}
 
-	// Return demo client with sufficient credits
-	return &Client{
-		ID:          uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
-		Name:        "Demo Client",
-		CreditCents: 100000,
-	}, nil
+	// Fetch clients and validate key (supports bcrypt or plaintext for demo seeds)
+	rows, err := a.db.QueryContext(ctx, `
+        SELECT id, name, api_key_hash, dlr_callback_url, callback_hmac_secret, credit_cents
+        FROM clients`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query clients: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var c Client
+		if err := rows.Scan(&c.ID, &c.Name, &c.APIKeyHash, &c.DLRCallbackURL, &c.CallbackHMACSecret, &c.CreditCents); err != nil {
+			return nil, fmt.Errorf("failed to scan client: %w", err)
+		}
+		// Accept either bcrypt match or plaintext equality (for simple seeds)
+		if bcrypt.CompareHashAndPassword([]byte(c.APIKeyHash), []byte(apiKey)) == nil || c.APIKeyHash == apiKey {
+			return &c, nil
+		}
+	}
+
+	return nil, fmt.Errorf("invalid API key")
 }
 
 func (a *AuthService) GetClientByID(ctx context.Context, clientID uuid.UUID) (*Client, error) {
@@ -100,19 +115,10 @@ func (a *AuthService) GetClientByID(ctx context.Context, clientID uuid.UUID) (*C
 func (a *AuthService) RequireAPIKey() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		apiKey := c.Get("X-API-Key")
-		if apiKey != "secret" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "invalid API key",
-			})
+		client, err := a.AuthenticateAPIKey(c.Context(), apiKey)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid API key"})
 		}
-
-		// Create demo client
-		client := &Client{
-			ID:          uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
-			Name:        "Demo Client",
-			CreditCents: 100000,
-		}
-
 		c.Locals("client", client)
 		return c.Next()
 	}

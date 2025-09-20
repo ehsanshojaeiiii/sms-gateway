@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"sms-gateway/internal/auth"
 	"sms-gateway/internal/billing"
 	"sms-gateway/internal/dlr"
@@ -17,14 +18,15 @@ import (
 )
 
 type Handlers struct {
-	logger            *zap.Logger
-	metrics           *observability.Metrics
-	messageStore      *messages.Store
-	idempotencyStore  *idempotency.Store
-	billingService    *billing.BillingService
-	queue             *nats.Queue
-	dlrService        *dlr.Service
-	pricePerPartCents int64
+	logger                *zap.Logger
+	metrics               *observability.Metrics
+	messageStore          *messages.Store
+	idempotencyStore      *idempotency.Store
+	billingService        *billing.BillingService
+	queue                 *nats.Queue
+	dlrService            *dlr.Service
+	pricePerPartCents     int64
+	expressSurchargeCents int64
 }
 
 func NewHandlers(
@@ -38,14 +40,15 @@ func NewHandlers(
 	pricePerPartCents int64,
 ) *Handlers {
 	return &Handlers{
-		logger:            logger,
-		metrics:           metrics,
-		messageStore:      messageStore,
-		idempotencyStore:  idempotencyStore,
-		billingService:    billingService,
-		queue:             queue,
-		dlrService:        dlrService,
-		pricePerPartCents: pricePerPartCents,
+		logger:                logger,
+		metrics:               metrics,
+		messageStore:          messageStore,
+		idempotencyStore:      idempotencyStore,
+		billingService:        billingService,
+		queue:                 queue,
+		dlrService:            dlrService,
+		pricePerPartCents:     pricePerPartCents,
+		expressSurchargeCents: 2, // default; can be made configurable
 	}
 }
 
@@ -64,7 +67,7 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 	}
 
 	// Validate request
-	if req.To == "" || req.From == "" || req.Text == "" {
+	if req.To == "" || req.From == "" || (!req.OTP && req.Text == "") {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "missing required fields: to, from, text",
 		})
@@ -95,11 +98,26 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 		}
 	}
 
-	// Calculate parts and cost
+	// Handle OTP generation if requested
+	var otpCode *string
+	if req.OTP {
+		// Generate 6-digit code
+		code := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+		otpCode = &code
+		if req.Text == "" {
+			// Default template
+			req.Text = fmt.Sprintf("Your verification code is %s", code)
+		}
+	}
+
+	// Calculate parts and cost; apply express surcharge per part if requested
 	parts := messages.CalculateParts(req.Text)
 	costCents := int64(parts) * h.pricePerPartCents
+	if req.Express {
+		costCents += int64(parts) * h.expressSurchargeCents
+	}
 
-	// Create message
+	// Create message first (needed for credit lock FK)
 	msg := &messages.Message{
 		ID:              uuid.New(),
 		ClientID:        client.ID,
@@ -114,9 +132,14 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 		UpdatedAt:       time.Now(),
 	}
 
-	// Hold credits
-	_, err = h.billingService.HoldCredits(c.Context(), client.ID, msg.ID, costCents)
-	if err != nil {
+	if err := h.messageStore.CreateMessage(c.Context(), msg); err != nil {
+		h.logger.Error("failed to create message", zap.Error(err))
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	// Hold credits (deduct and create lock). On failure, delete message and return 402
+	if _, err = h.billingService.HoldCredits(c.Context(), client.ID, msg.ID, costCents); err != nil {
+		_ = h.messageStore.DeleteMessage(c.Context(), msg.ID)
 		h.logger.Warn("failed to hold credits",
 			zap.String("client_id", client.ID.String()),
 			zap.Int64("cost_cents", costCents),
@@ -125,14 +148,6 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 			"error":          "insufficient credits",
 			"required_cents": costCents,
 		})
-	}
-
-	// Store message
-	if err := h.messageStore.CreateMessage(c.Context(), msg); err != nil {
-		// Release held credits on failure
-		h.billingService.ReleaseCredits(c.Context(), msg.ID)
-		h.logger.Error("failed to create message", zap.Error(err))
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})
 	}
 
 	// Store idempotency key
@@ -163,6 +178,7 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusAccepted).JSON(&messages.CreateMessageResponse{
 		MessageID: msg.ID,
 		Status:    msg.Status,
+		OTPCode:   otpCode,
 	})
 }
 
@@ -218,6 +234,22 @@ func (h *Handlers) GetClientInfo(c *fiber.Ctx) error {
 		"name":         client.Name,
 		"credit_cents": credits,
 	})
+}
+
+// ListMessages handles GET /v1/messages
+func (h *Handlers) ListMessages(c *fiber.Ctx) error {
+	client, err := auth.GetClientFromContext(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
+	}
+	// Simple pagination defaults
+	limit := 50
+	offset := 0
+	msgs, err := h.messageStore.ListMessages(c.Context(), client.ID, limit, offset)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})
+	}
+	return c.JSON(msgs)
 }
 
 // HealthCheck handles GET /healthz

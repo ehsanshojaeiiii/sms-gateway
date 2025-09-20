@@ -46,16 +46,19 @@ func (b *BillingService) HoldCredits(ctx context.Context, clientID, messageID uu
 	}
 	defer tx.Rollback()
 
-	// Check if client has sufficient credits
+	// Check and deduct credits atomically
 	var currentCredits int64
 	err = tx.QueryRowContext(ctx, "SELECT credit_cents FROM clients WHERE id = $1 FOR UPDATE", clientID).Scan(&currentCredits)
 	if err != nil {
-		// If no client record, assume sufficient credits for demo
-		currentCredits = 100000
+		return nil, fmt.Errorf("client not found: %w", err)
 	}
-
 	if currentCredits < amountCents {
 		return nil, fmt.Errorf("insufficient credits: have %d, need %d", currentCredits, amountCents)
+	}
+	// Deduct immediately on hold
+	_, err = tx.ExecContext(ctx, "UPDATE clients SET credit_cents = credit_cents - $1 WHERE id = $2", amountCents, clientID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deduct credits: %w", err)
 	}
 
 	// Create credit lock record
@@ -67,15 +70,16 @@ func (b *BillingService) HoldCredits(ctx context.Context, clientID, messageID uu
 		State:       StateHeld,
 	}
 
-	// Try to insert credit lock (ignore if table doesn't exist for demo)
 	_, err = tx.ExecContext(ctx,
 		"INSERT INTO credit_locks (id, client_id, message_id, amount_cents, state) VALUES ($1, $2, $3, $4, $5)",
 		lock.ID, lock.ClientID, lock.MessageID, lock.AmountCents, lock.State)
 	if err != nil {
-		b.logger.Warn("credit_locks table not available, proceeding with demo", zap.Error(err))
+		return nil, fmt.Errorf("failed to insert credit lock: %w", err)
 	}
 
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit hold: %w", err)
+	}
 
 	b.logger.Info("credits held",
 		zap.String("client_id", clientID.String()),
@@ -87,12 +91,14 @@ func (b *BillingService) HoldCredits(ctx context.Context, clientID, messageID uu
 
 // CaptureCredits marks held credits as captured (final charge)
 func (b *BillingService) CaptureCredits(ctx context.Context, messageID uuid.UUID) error {
-	query := `
-		UPDATE credit_locks 
-		SET state = $1 
-		WHERE message_id = $2 AND state = $3`
+	tx, err := b.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback()
 
-	result, err := b.db.ExecContext(ctx, query, StateCaptured, messageID, StateHeld)
+	// Mark lock captured
+	result, err := tx.ExecContext(ctx, `UPDATE credit_locks SET state = $1 WHERE message_id = $2 AND state = $3`, StateCaptured, messageID, StateHeld)
 	if err != nil {
 		return fmt.Errorf("failed to capture credits: %w", err)
 	}
@@ -106,6 +112,9 @@ func (b *BillingService) CaptureCredits(ctx context.Context, messageID uuid.UUID
 		return fmt.Errorf("no held credits found for message %s", messageID)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit capture: %w", err)
+	}
 	b.logger.Info("credits captured", zap.String("message_id", messageID.String()))
 	return nil
 }

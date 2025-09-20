@@ -44,6 +44,14 @@ func (s *Store) CreateMessage(ctx context.Context, msg *Message) error {
 	return nil
 }
 
+func (s *Store) DeleteMessage(ctx context.Context, messageID uuid.UUID) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE id = $1`, messageID)
+	if err != nil {
+		return fmt.Errorf("failed to delete message: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) GetMessage(ctx context.Context, messageID uuid.UUID) (*Message, error) {
 	query := `
 		SELECT id, client_id, to_msisdn, from_sender, text, parts, status,
@@ -100,6 +108,10 @@ func (s *Store) GetMessagesByClient(ctx context.Context, clientID uuid.UUID, lim
 	}
 
 	return messages, nil
+}
+
+func (s *Store) ListMessages(ctx context.Context, clientID uuid.UUID, limit, offset int) ([]*Message, error) {
+	return s.GetMessagesByClient(ctx, clientID, limit, offset)
 }
 
 func (s *Store) HealthCheck(ctx context.Context) error {
