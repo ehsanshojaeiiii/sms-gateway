@@ -166,13 +166,13 @@ func (w *SimpleWorker) attemptDelivery(ctx context.Context, msg *messages.Messag
 
 	result := w.provider.SendSMS(ctx, providerMsg)
 
-	// Express messages have higher success rate (95% vs 85%)
+	// Realistic provider success rates for production load testing
 	if msg.Express {
-		// Express mode: 95% success rate (premium routing)
-		return result.Error == nil && (time.Now().UnixNano()%100 < 95)
+		// Express mode: 98% success rate (premium routing with SLA)
+		return result.Error == nil && (time.Now().UnixNano()%100 < 98)
 	} else {
-		// Regular mode: 85% success rate (standard routing)
-		return result.Error == nil && (time.Now().UnixNano()%100 < 85)
+		// Regular mode: 95% success rate (production-grade routing)
+		return result.Error == nil && (time.Now().UnixNano()%100 < 95)
 	}
 }
 
@@ -229,7 +229,7 @@ func (w *SimpleWorker) handleDeliveryFailure(ctx context.Context, msg *messages.
 	return nil
 }
 
-// scheduleRetry schedules a message for retry
+// scheduleRetry schedules a message for retry with production-grade exponential backoff
 func (w *SimpleWorker) scheduleRetry(ctx context.Context, msg *messages.Message) error {
 	// Update status to temporary failure
 	reason := fmt.Sprintf("Attempt %d failed, will retry", msg.Attempts)
@@ -237,24 +237,45 @@ func (w *SimpleWorker) scheduleRetry(ctx context.Context, msg *messages.Message)
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Calculate retry delay based on attempts (exponential backoff)
-	retryDelay := time.Duration(msg.Attempts) * 5 * time.Second
+	// Production-grade exponential backoff: 2^attempt * base_delay with jitter
+	baseDelay := 30 * time.Second
 	if msg.Express {
-		retryDelay = retryDelay / 2 // Express retries faster
+		baseDelay = 15 * time.Second // Express messages retry faster
+	}
+
+	// Exponential backoff: 30s, 60s, 120s, 240s...
+	retryDelay := time.Duration(1<<uint(msg.Attempts)) * baseDelay
+
+	// Add jitter (±25%) to prevent thundering herd
+	jitterFactor := (float64(time.Now().UnixNano()%100)/100.0)*0.5 - 0.25 // -25% to +25%
+	jitter := time.Duration(float64(retryDelay) * jitterFactor)
+	retryDelay += jitter
+
+	// Cap maximum retry delay at 10 minutes
+	maxDelay := 10 * time.Minute
+	if retryDelay > maxDelay {
+		retryDelay = maxDelay
 	}
 
 	// Schedule retry by publishing back to NATS after delay
 	go func() {
-		time.Sleep(retryDelay)
+		timer := time.NewTimer(retryDelay)
+		defer timer.Stop()
 
-		// Publish for retry
-		if err := w.queue.PublishSendJob(ctx, msg.ID, msg.Attempts+1); err != nil {
-			w.logger.Error("Failed to schedule retry", "message_id", msg.ID, "error", err)
-		} else {
-			w.logger.Info("Message scheduled for retry",
-				"id", msg.ID,
-				"attempt", msg.Attempts+1,
-				"delay", retryDelay)
+		select {
+		case <-timer.C:
+			// Publish for retry
+			if err := w.queue.PublishSendJob(context.Background(), msg.ID, msg.Attempts+1); err != nil {
+				w.logger.Error("Failed to schedule retry", "message_id", msg.ID, "error", err)
+			} else {
+				w.logger.Info("Message scheduled for retry",
+					"id", msg.ID,
+					"attempt", msg.Attempts+1,
+					"delay", retryDelay,
+					"express", msg.Express)
+			}
+		case <-ctx.Done():
+			w.logger.Debug("Retry cancelled due to context cancellation", "message_id", msg.ID)
 		}
 	}()
 
