@@ -85,7 +85,7 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 		Parts:     parts,
 		Status:    messages.StatusQueued,
 		Reference: req.Reference,
-		Express:   req.Express,  // ← Fix: Save express flag
+		Express:   req.Express, // ← Fix: Save express flag
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -101,11 +101,16 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 		return c.Status(402).JSON(fiber.Map{"error": "insufficient credits", "required": cost})
 	}
 
-	// Queue for sending
+	// Publish message to NATS for worker processing
 	if err := h.queue.PublishSendJob(c.Context(), msg.ID, 1); err != nil {
-		h.logger.Error("failed to queue message", "error", err)
-		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+		h.logger.Error("failed to publish message to NATS", "error", err, "message_id", msg.ID)
+		// If NATS fails, release credits and mark message as failed
+		h.billing.ReleaseCredits(c.Context(), msg.ID)
+		h.store.UpdateStatus(c.Context(), msg.ID, messages.StatusFailedPerm, nil, &[]string{"NATS publish failed"}[0])
+		return c.Status(500).JSON(fiber.Map{"error": "failed to queue message"})
 	}
+
+	h.logger.Info("message published to NATS for processing", "id", msg.ID, "express", msg.Express)
 
 	h.logger.Info("message created", "id", msg.ID, "client", req.ClientID, "cost", cost)
 

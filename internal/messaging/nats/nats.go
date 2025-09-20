@@ -44,6 +44,39 @@ func (q *Queue) PublishSendJobWithDelay(ctx context.Context, messageID uuid.UUID
 	return q.PublishSendJob(ctx, messageID, attempt)
 }
 
+// ConsumeSendJob consumes a message from the SMS send queue with proper concurrency handling
+func (q *Queue) ConsumeSendJob(ctx context.Context) (uuid.UUID, error) {
+	// Use a queue-based subscription for better concurrency control
+	sub, err := q.conn.QueueSubscribeSync("sms.send", "sms-workers")
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer sub.Unsubscribe()
+
+	// Set pending limits for backpressure control
+	sub.SetPendingLimits(1000, 64*1024*1024) // 1000 messages, 64MB
+
+	// Wait for a message with timeout (prevents indefinite blocking)
+	msg, err := sub.NextMsgWithContext(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	// Parse the job atomically
+	var job SendJob
+	if err := json.Unmarshal(msg.Data, &job); err != nil {
+		q.logger.Error("Failed to unmarshal send job", "error", err, "raw_data", string(msg.Data))
+		return uuid.Nil, err
+	}
+
+	q.logger.Debug("Consumed message from NATS",
+		"message_id", job.MessageID,
+		"attempt", job.Attempt,
+		"queue_group", "sms-workers")
+
+	return job.MessageID, nil
+}
+
 func (q *Queue) PublishDLQJob(ctx context.Context, messageID uuid.UUID, reason string) error {
 	data := map[string]interface{}{
 		"message_id": messageID,

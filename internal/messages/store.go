@@ -20,6 +20,11 @@ func NewStore(db *db.PostgresDB, logger *slog.Logger) *Store {
 	return &Store{db: db, logger: logger}
 }
 
+// DB returns the underlying database connection for advanced queries
+func (s *Store) DB() *db.PostgresDB {
+	return s.db
+}
+
 func (s *Store) Create(ctx context.Context, msg *Message) error {
 	query := `INSERT INTO messages (id, client_id, to_msisdn, from_sender, text, parts, status, client_reference, express, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`

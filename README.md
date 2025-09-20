@@ -172,20 +172,44 @@ if req.OTP {
 
 ## 🧪 **Testing**
 
-### **Test Coverage**
+### **Go Tests**
 ```bash
-make test
+make test           # Unit + integration tests (cached)
+make test-fresh     # Unit + integration tests (fresh)
 # ✅ Unit tests: Message calculations, credit locks, API handlers
 # ✅ Integration tests: Core business logic, OTP generation, Express SMS
 # ✅ All PDF requirements validated
 ```
 
+### **K6 Load Tests** 🚀
+Professional load testing with [Grafana K6](https://github.com/grafana/k6):
+
+```bash
+make k6-install     # Install K6 load testing tool
+make k6-smoke       # Quick smoke test (30s)
+make k6-load        # Standard load test (16m) 
+make k6-stress      # Stress test (16m)
+make k6-spike       # Traffic spike test (8m)
+make k6-volume      # Volume test (100K messages)
+make k6-burst       # Burst test (2.5m)
+make k6-endurance   # Stability test (30m)
+make k6-all         # Complete test suite
+```
+
+**Scale Testing Features**:
+- ✅ **100M messages/day validation** (Volume + Endurance tests)
+- ✅ **Concurrent user simulation** (up to 200 virtual users)
+- ✅ **Real-world scenarios** (Black Friday bursts, OTP banking)
+- ✅ **Performance thresholds** (95% < 2s, 99% < 5s)
+- ✅ **Custom SMS metrics** (success rates, latency, billing)
+
 ### **Test Categories**
 - **Message Part Calculation**: GSM7/UCS2 encoding support
-- **OTP Generation**: 6-digit codes with delivery guarantee
-- **Express SMS**: Surcharge calculation
+- **OTP Generation**: 6-digit codes with delivery guarantee  
+- **Express SMS**: Surcharge calculation and priority processing
 - **Credit Management**: Hold/capture/release workflow
 - **Status Tracking**: Message lifecycle validation
+- **Scale Testing**: High-volume concurrent processing
 
 ## 🚢 **Deployment**
 
