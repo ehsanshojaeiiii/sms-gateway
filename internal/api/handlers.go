@@ -85,6 +85,7 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 		Parts:     parts,
 		Status:    messages.StatusQueued,
 		Reference: req.Reference,
+		Express:   req.Express,  // ← Fix: Save express flag
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}

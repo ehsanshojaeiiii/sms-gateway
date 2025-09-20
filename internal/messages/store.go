@@ -21,10 +21,10 @@ func NewStore(db *db.PostgresDB, logger *slog.Logger) *Store {
 }
 
 func (s *Store) Create(ctx context.Context, msg *Message) error {
-	query := `INSERT INTO messages (id, client_id, to_msisdn, from_sender, text, parts, status, client_reference, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+	query := `INSERT INTO messages (id, client_id, to_msisdn, from_sender, text, parts, status, client_reference, express, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 
-	_, err := s.db.ExecContext(ctx, query, msg.ID, msg.ClientID, msg.To, msg.From, msg.Text, msg.Parts, msg.Status, msg.Reference, msg.CreatedAt, msg.UpdatedAt)
+	_, err := s.db.ExecContext(ctx, query, msg.ID, msg.ClientID, msg.To, msg.From, msg.Text, msg.Parts, msg.Status, msg.Reference, msg.Express, msg.CreatedAt, msg.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to create message: %w", err)
 	}
@@ -34,13 +34,13 @@ func (s *Store) Create(ctx context.Context, msg *Message) error {
 }
 
 func (s *Store) GetByID(ctx context.Context, messageID uuid.UUID) (*Message, error) {
-	query := `SELECT id, client_id, to_msisdn, from_sender, text, parts, status, client_reference, provider, provider_message_id, attempts, last_error, created_at, updated_at
+	query := `SELECT id, client_id, to_msisdn, from_sender, text, parts, status, client_reference, provider, provider_message_id, attempts, last_error, express, created_at, updated_at
 		FROM messages WHERE id = $1`
 
 	var msg Message
 	err := s.db.QueryRowContext(ctx, query, messageID).Scan(
 		&msg.ID, &msg.ClientID, &msg.To, &msg.From, &msg.Text, &msg.Parts, &msg.Status, &msg.Reference,
-		&msg.Provider, &msg.ProviderMessageID, &msg.Attempts, &msg.LastError, &msg.CreatedAt, &msg.UpdatedAt)
+		&msg.Provider, &msg.ProviderMessageID, &msg.Attempts, &msg.LastError, &msg.Express, &msg.CreatedAt, &msg.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("message not found")
@@ -53,7 +53,7 @@ func (s *Store) GetByID(ctx context.Context, messageID uuid.UUID) (*Message, err
 }
 
 func (s *Store) ListByClient(ctx context.Context, clientID uuid.UUID, limit, offset int) ([]*Message, error) {
-	query := `SELECT id, client_id, to_msisdn, from_sender, text, parts, status, client_reference, provider, provider_message_id, attempts, last_error, created_at, updated_at
+	query := `SELECT id, client_id, to_msisdn, from_sender, text, parts, status, client_reference, provider, provider_message_id, attempts, last_error, express, created_at, updated_at
 		FROM messages WHERE client_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
 
 	rows, err := s.db.QueryContext(ctx, query, clientID, limit, offset)
@@ -66,7 +66,7 @@ func (s *Store) ListByClient(ctx context.Context, clientID uuid.UUID, limit, off
 	for rows.Next() {
 		var msg Message
 		err := rows.Scan(&msg.ID, &msg.ClientID, &msg.To, &msg.From, &msg.Text, &msg.Parts, &msg.Status, &msg.Reference,
-			&msg.Provider, &msg.ProviderMessageID, &msg.Attempts, &msg.LastError, &msg.CreatedAt, &msg.UpdatedAt)
+			&msg.Provider, &msg.ProviderMessageID, &msg.Attempts, &msg.LastError, &msg.Express, &msg.CreatedAt, &msg.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
