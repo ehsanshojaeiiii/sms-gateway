@@ -59,7 +59,7 @@ func New(logger *slog.Logger, store *messages.Store, billing *billing.Service, q
 }
 
 func (w *Worker) Start(ctx context.Context) error {
-	w.logger.Info("Starting SMS Worker", 
+	w.logger.Info("Starting SMS Worker",
 		"worker_pool_size", w.workerPool,
 		"max_concurrent_jobs", 100)
 
@@ -83,7 +83,7 @@ func (w *Worker) Start(ctx context.Context) error {
 func (w *Worker) Stop(ctx context.Context) error {
 	w.logger.Info("Stopping SMS Worker...")
 	close(w.stop)
-	
+
 	// Wait for all workers to finish with timeout
 	done := make(chan struct{})
 	go func() {
@@ -222,11 +222,11 @@ func (w *Worker) attemptDelivery(ctx context.Context, msg *messages.Message) boo
 // handleSuccess processes successful delivery
 func (w *Worker) handleSuccess(ctx context.Context, msg *messages.Message) {
 	providerMsgID := fmt.Sprintf("prov_%d", time.Now().UnixNano())
-	
+
 	// Update to SENT status
 	w.store.UpdateStatus(ctx, msg.ID, messages.StatusSent, &providerMsgID, nil)
 	w.store.UpdateProvider(ctx, msg.ID, "mock_provider")
-	
+
 	// Capture credits
 	if err := w.billing.CaptureCredits(ctx, msg.ID); err != nil {
 		w.logger.Error("Failed to capture credits", "message_id", msg.ID, "error", err)
@@ -244,12 +244,12 @@ func (w *Worker) handleFailure(ctx context.Context, msg *messages.Message) {
 		// Permanent failure
 		reason := fmt.Sprintf("Failed after %d attempts", msg.Attempts)
 		w.store.UpdateStatus(ctx, msg.ID, messages.StatusFailedPerm, nil, &reason)
-		
+
 		// Release credits
 		if err := w.billing.ReleaseCredits(ctx, msg.ID); err != nil {
 			w.logger.Error("Failed to release credits", "message_id", msg.ID, "error", err)
 		}
-		
+
 		w.logger.Error("Message permanently failed", "message_id", msg.ID, "attempts", msg.Attempts)
 		return
 	}
