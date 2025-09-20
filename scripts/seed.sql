@@ -1,35 +1,23 @@
--- Seed script for demo client
--- This creates a demo client with API key "secret" and some initial credits
+-- Simple seed script for demo client
+-- Reset demo client with sufficient credits for testing
 
--- Insert demo client
+-- Ensure demo client exists with proper credits
 INSERT INTO clients (
     id, 
-    name, 
-    api_key_hash, 
+    name,
+    api_key_hash,
     credit_cents,
-    dlr_callback_url,
-    callback_hmac_secret
+    dlr_callback_url
 ) VALUES (
     '550e8400-e29b-41d4-a716-446655440000',
     'Demo Client',
-    '$2a$10$N9qo8uLOickgx2ZMRZoMye/6lrVqaOZFJl.p6pznXiKlrDVrF.6Vi', -- bcrypt hash of "secret"
-    100000, -- 1000.00 in cents
-    'https://httpbin.org/post',
-    'demo-hmac-secret-key'
-) ON CONFLICT (api_key_hash) DO NOTHING;
-
--- Insert second client (plaintext key for demo: "user2")
-INSERT INTO clients (
-    id,
-    name,
-    api_key_hash,
-    credit_cents
-) VALUES (
-    '660e8400-e29b-41d4-a716-446655440000',
-    'User Two',
-    'user2',
-    5000
-) ON CONFLICT (api_key_hash) DO NOTHING;
+    'demo-api-key', -- Simple demo API key
+    100000, -- 1000.00 in cents (enough for 20,000 messages at 5 cents each)
+    'https://httpbin.org/post'
+) ON CONFLICT (id) DO UPDATE SET 
+    credit_cents = 100000,
+    name = 'Demo Client',
+    api_key_hash = 'demo-api-key';
 
 -- Display the created client
 SELECT 
@@ -39,4 +27,4 @@ SELECT
     dlr_callback_url,
     created_at
 FROM clients 
-WHERE name = 'Demo Client';
+WHERE id = '550e8400-e29b-41d4-a716-446655440000';

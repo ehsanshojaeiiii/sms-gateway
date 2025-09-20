@@ -10,10 +10,16 @@ run: ## Start SMS Gateway (infrastructure + services)
 	@echo "✅ SMS Gateway running on http://localhost:8080"
 	@echo "📱 Test: curl -X POST http://localhost:8080/v1/messages -H 'Content-Type: application/json' -d '{\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"to\":\"+1234567890\",\"from\":\"TEST\",\"text\":\"Hello SMS!\"}'"
 
-test: ## Run all tests
-	@echo "🧪 Running tests..."
-	@go test -v ./internal/messages ./internal/billing ./internal/api ./test
-	@echo "✅ All tests passed!"
+test: ## Run unit tests
+	@echo "🧪 Running unit tests..."
+	@go test -v ./internal/messages ./internal/billing ./internal/api ./test -short
+	@echo "✅ Unit tests passed!"
+
+realistic-test: ## Run realistic performance test (PDF compliant)
+	@echo "🚀 Running realistic performance test..."
+	@make seed > /dev/null
+	@go test -v ./test -run TestRealisticPerformance
+	@echo "✅ Performance test complete!"
 
 build: ## Build binaries
 	@echo "🔨 Building..."
@@ -60,6 +66,77 @@ logs: ## Show logs
 
 status: ## Show service status
 	@docker-compose ps
+
+# 🧪 Comprehensive Testing
+comprehensive-test: ## Run complete test suite (45min)
+	@echo "🧪 Starting comprehensive test suite..."
+	@echo "⏱️  Estimated time: 45 minutes"
+	@$(MAKE) run
+	@sleep 15
+	@echo "\n📋 Phase 1: Unit Tests (2min)"
+	@$(MAKE) test
+	@echo "\n📋 Phase 2: API Validation (2min)"
+	@$(MAKE) api-test
+	@echo "\n📋 Phase 3: Failure Scenarios (10min)"
+	@./test-failure-scenarios.sh
+	@echo "\n📋 Phase 4: Load Testing (30min)"
+	@$(MAKE) k6-all
+	@echo "\n🎉 Comprehensive testing complete!"
+
+quick-test: ## Quick system validation (5min)
+	@echo "🚀 Quick system validation..."
+	@$(MAKE) run
+	@sleep 10
+	@$(MAKE) api-test
+	@./test-failure-scenarios.sh
+	@echo "✅ Quick test complete!"
+
+failure-test: ## Test failure scenarios only
+	@echo "🚨 Testing failure scenarios..."
+	@./test-failure-scenarios.sh
+
+# 🔧 K6 Load Testing
+k6-install: ## Install K6 load testing tool
+	@echo "📦 Installing K6..."
+	@if command -v brew >/dev/null 2>&1; then \
+		brew install k6; \
+	elif command -v apt-get >/dev/null 2>&1; then \
+		sudo apt update && sudo apt install k6; \
+	else \
+		echo "❌ Please install K6 manually: https://k6.io/docs/getting-started/installation/"; \
+	fi
+
+k6-smoke: ## K6 smoke test (30s)
+	@echo "💨 Running K6 smoke test..."
+	@cd k6 && k6 run --env SCENARIO=smoke-test sms-gateway-load-test.js
+
+k6-load: ## K6 load test (16m)  
+	@echo "📊 Running K6 load test..."
+	@cd k6 && k6 run --env SCENARIO=load-test sms-gateway-load-test.js
+
+k6-stress: ## K6 stress test (16m)
+	@echo "🔥 Running K6 stress test..."
+	@cd k6 && k6 run --env SCENARIO=stress-test sms-gateway-load-test.js
+
+k6-spike: ## K6 spike test (8m)
+	@echo "⚡ Running K6 spike test..."
+	@cd k6 && k6 run --env SCENARIO=spike-test sms-gateway-load-test.js
+
+k6-volume: ## K6 volume test (100K messages)
+	@echo "📈 Running K6 volume test..."
+	@cd k6 && k6 run --env SCENARIO=volume-test sms-gateway-load-test.js
+
+k6-burst: ## K6 burst test (2.5m)
+	@echo "💥 Running K6 burst test..."
+	@cd k6 && k6 run scenarios/burst-test.js
+
+k6-endurance: ## K6 endurance test (30m)
+	@echo "🏃 Running K6 endurance test..."
+	@cd k6 && k6 run scenarios/endurance-test.js
+
+k6-all: ## Run complete K6 test suite
+	@echo "🎯 Running complete K6 test suite..."
+	@cd k6 && ./run-tests.sh all
 
 # 📚 Documentation
 help: ## Show this help

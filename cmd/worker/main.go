@@ -55,8 +55,8 @@ func main() {
 	// SMS Provider
 	provider := mock.NewProvider()
 
-	// Worker (simplified for interview demo)
-	w := worker.NewSimple(logger, store, billingService, queue, provider, cfg)
+	// Worker
+	w := worker.New(logger, store, billingService, queue, provider, cfg)
 
 	// Start worker
 	if err := w.Start(ctx); err != nil {

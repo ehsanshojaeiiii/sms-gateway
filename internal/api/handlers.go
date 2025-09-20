@@ -9,6 +9,7 @@ import (
 	"sms-gateway/internal/messages"
 	"sms-gateway/internal/messaging/nats"
 	"sms-gateway/internal/otp"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -59,6 +60,10 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
 	}
 
+	// Validate required fields
+	if req.ClientID.String() == "00000000-0000-0000-0000-000000000000" {
+		return c.Status(400).JSON(fiber.Map{"error": "client_id is required"})
+	}
 	if req.To == "" || req.From == "" || (!req.OTP && req.Text == "") {
 		return c.Status(400).JSON(fiber.Map{"error": "missing required fields"})
 	}
@@ -85,17 +90,21 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 		Parts:     parts,
 		Status:    messages.StatusQueued,
 		Reference: req.Reference,
-		Express:   req.Express, // ← Fix: Save express flag
+		Express:   req.Express,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 
 	if err := h.store.Create(c.Context(), msg); err != nil {
 		h.logger.Error("failed to create message", "error", err)
+		// Check for foreign key constraint violation (invalid client_id)
+		if strings.Contains(err.Error(), "foreign key constraint") || strings.Contains(err.Error(), "client_id_fkey") {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid client_id"})
+		}
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 
-	// Hold credits
+	// Actually hold credits for the real message
 	if _, err := h.billing.HoldCredits(c.Context(), req.ClientID, msg.ID, cost); err != nil {
 		h.store.Delete(c.Context(), msg.ID)
 		return c.Status(402).JSON(fiber.Map{"error": "insufficient credits", "required": cost})

@@ -31,7 +31,7 @@ type SimpleWorker struct {
 	concurrent int64
 }
 
-func NewSimple(logger *slog.Logger, store *messages.Store, billing *billing.Service, queue *nats.Queue, provider *mock.Provider, cfg *config.Config) *SimpleWorker {
+func New(logger *slog.Logger, store *messages.Store, billing *billing.Service, queue *nats.Queue, provider *mock.Provider, cfg *config.Config) *SimpleWorker {
 	return &SimpleWorker{
 		logger:   logger,
 		store:    store,
