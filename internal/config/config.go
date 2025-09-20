@@ -23,7 +23,8 @@ type Config struct {
 	NATSURL string `envconfig:"NATS_URL" required:"true"`
 
 	// Billing
-	PricePerPartCents int64 `envconfig:"PRICE_PER_PART_CENTS" default:"5"`
+	PricePerPartCents     int64 `envconfig:"PRICE_PER_PART_CENTS" default:"5"`
+	ExpressSurchargeCents int64 `envconfig:"EXPRESS_SURCHARGE_CENTS" default:"2"`
 
 	// Rate Limiting
 	RateLimitRPS   int `envconfig:"RATE_LIMIT_RPS" default:"100"`
