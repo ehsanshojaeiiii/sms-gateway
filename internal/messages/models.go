@@ -42,11 +42,14 @@ type CreateMessageRequest struct {
 	Text            string  `json:"text" validate:"required,max=1600"`
 	DLRCallbackURL  *string `json:"dlr_callback_url,omitempty" validate:"omitempty,url"`
 	ClientReference *string `json:"client_reference,omitempty" validate:"omitempty,max=64"`
+	OTP             bool    `json:"otp,omitempty"`
+	Express         bool    `json:"express,omitempty"`
 }
 
 type CreateMessageResponse struct {
 	MessageID uuid.UUID `json:"message_id"`
 	Status    Status    `json:"status"`
+	OTPCode   *string   `json:"otp_code,omitempty"`
 }
 
 type GetMessageResponse struct {
