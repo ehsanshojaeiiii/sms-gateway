@@ -1,441 +1,364 @@
 # SMS Gateway - System Design
 
-This document provides a comprehensive overview of the SMS Gateway architecture, design decisions, and scalability considerations.
+## 🎯 Overview
 
-## Table of Contents
-- [System Overview](#system-overview)
-- [Component Architecture](#component-architecture)
-- [Data Models](#data-models)
-- [API Design](#api-design)
-- [Message Processing Flow](#message-processing-flow)
-- [Scalability & Performance](#scalability--performance)
-- [Reliability & Fault Tolerance](#reliability--fault-tolerance)
-- [Security](#security)
-- [Observability](#observability)
-- [Future Architecture Considerations](#future-architecture-considerations)
+A modern, high-performance SMS Gateway designed for reliability, scalability, and ease of use. The system handles SMS message processing, OTP generation, express delivery, and comprehensive reporting without requiring authentication.
 
-## System Overview
-
-The SMS Gateway is designed as a microservices architecture with the following key characteristics:
-
-- **Event-driven**: Asynchronous message processing via queues
-- **Horizontally scalable**: Stateless services that can scale independently  
-- **Fault-tolerant**: Comprehensive error handling and retry mechanisms
-- **Observable**: Rich metrics, logging, and health checks
-- **Cloud-native**: Docker-first with external service dependencies
+## 🏛️ System Architecture
 
 ### High-Level Architecture
-
 ```
-┌─────────────┐    ┌──────────────┐    ┌─────────────┐
-│   Client    │───▶│  API Service │───▶│    Queue    │
-└─────────────┘    └──────────────┘    └─────────────┘
-                           │                    │
-                           ▼                    ▼
-                   ┌──────────────┐    ┌─────────────┐
-                   │  Database    │    │   Worker    │
-                   │ (Postgres)   │    │  Service    │
-                   └──────────────┘    └─────────────┘
-                           ▲                    │
-                           │                    ▼
-                   ┌──────────────┐    ┌─────────────┐
-                   │    Redis     │    │ SMS Provider│
-                   │   (Cache)    │    │   (Mock)    │
-                   └──────────────┘    └─────────────┘
+┌─────────────────┐
+│   Load Balancer │
+└─────────────────┘
+         │
+┌─────────────────┐    ┌─────────────────┐
+│   API Gateway   │────│   SMS Gateway   │
+│   (Optional)    │    │   API Service   │
+└─────────────────┘    └─────────────────┘
+                                │
+    ┌───────────────────────────┼───────────────────────────┐
+    │                           │                           │
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   PostgreSQL    │    │      Redis      │    │      NATS       │
+│   (Messages)    │    │    (Cache)      │    │   (Queue)       │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                                                        │
+                                               ┌─────────────────┐
+                                               │  SMS Providers  │
+                                               │     (Mock)      │
+                                               └─────────────────┘
 ```
 
-## Component Architecture
+### Component Responsibilities
 
-### API Service (`cmd/api`)
+#### API Service (`cmd/api`)
+- **Purpose**: HTTP API server handling all client requests
+- **Framework**: Fiber (high-performance HTTP framework)
+- **Features**:
+  - REST API endpoints
+  - Request validation
+  - Response formatting
+  - Health checks
+  - Swagger documentation
 
-**Responsibilities:**
-- REST API endpoint handling
-- Request validation and authentication
-- Rate limiting enforcement
-- Credit validation and holding
-- Message persistence and queuing
-- DLR ingestion
+#### Message Management (`internal/messages`)
+- **Purpose**: Core message processing logic
+- **Components**:
+  - `models.go`: Data structures and validation
+  - `store.go`: Database operations
+- **Features**:
+  - SMS part calculation (GSM7/UCS2)
+  - Message lifecycle management
+  - Status tracking
 
-**Key Components:**
-- **Fiber HTTP Server**: High-performance HTTP framework
-- **Authentication Middleware**: API key validation with bcrypt
-- **Rate Limiter**: Token bucket algorithm with Redis backing
-- **Idempotency Handler**: Duplicate request prevention
-- **Billing Service**: Credit management with atomic transactions
+#### Billing System (`internal/billing`)
+- **Purpose**: Credit management and financial operations
+- **Features**:
+  - Credit hold/capture/release pattern
+  - Transaction safety
+  - Cost calculation
+  - Express delivery surcharges
 
-### Worker Service (`cmd/worker`)
+#### Delivery Processing (`internal/delivery`)
+- **Purpose**: Handle delivery receipts (DLR) from providers
+- **Features**:
+  - DLR webhook processing
+  - Status updates
+  - Credit finalization
 
-**Responsibilities:**
-- Asynchronous message processing
-- Provider communication
-- Retry logic with exponential backoff
-- Credit capture/release based on delivery status
-- Dead letter queue handling
+#### Database Layer (`internal/db`)
+- **Purpose**: Database connection management
+- **Components**:
+  - PostgreSQL connection
+  - Redis connection
+  - Migration support
 
-**Key Components:**  
-- **NATS Subscriber**: Queue message consumption
-- **Provider Adapter**: Pluggable SMS provider interface
-- **Retry Manager**: Configurable exponential backoff
-- **DLR Simulator**: Mock delivery report generation
+#### Message Queue (`internal/messaging`)
+- **Purpose**: Asynchronous message processing
+- **Technology**: NATS
+- **Features**:
+  - Message queuing
+  - Retry handling
+  - Dead letter queue
 
-### Database Layer (PostgreSQL)
+#### Provider Integration (`internal/providers`)
+- **Purpose**: SMS provider abstraction
+- **Current**: Mock provider for testing
+- **Extensible**: Easy to add real providers
 
-**Design Principles:**
-- **ACID Compliance**: Strong consistency for financial operations
-- **Normalized Schema**: Separate concerns across tables
-- **Indexed Queries**: Optimized for common access patterns
-- **Connection Pooling**: Efficient resource utilization
+## 🗄️ Data Models
 
-**Tables:**
-- `clients`: Customer accounts and configuration
-- `messages`: SMS message records and status
-- `credit_locks`: Financial transaction tracking  
-- `idempotency_keys`: Duplicate request prevention
+### Message
+```go
+type Message struct {
+    ID                uuid.UUID `json:"id"`
+    ClientID          uuid.UUID `json:"client_id"`
+    To                string    `json:"to"`
+    From              string    `json:"from"`
+    Text              string    `json:"text"`
+    Parts             int       `json:"parts"`
+    Status            Status    `json:"status"`
+    Reference         *string   `json:"reference,omitempty"`
+    Provider          *string   `json:"provider,omitempty"`
+    ProviderMessageID *string   `json:"provider_message_id,omitempty"`
+    Attempts          int       `json:"attempts"`
+    LastError         *string   `json:"last_error,omitempty"`
+    Express           bool      `json:"express"`
+    CreatedAt         time.Time `json:"created_at"`
+    UpdatedAt         time.Time `json:"updated_at"`
+}
+```
 
-### Cache Layer (Redis)
-
-**Use Cases:**
-- **Rate Limiting**: Token bucket counters with TTL
-- **Idempotency**: Fast duplicate detection cache
-- **Session Storage**: Future authentication token storage
-
-### Message Queue (NATS)
-
-**Design Choices:**
-- **Pub/Sub Model**: Decoupled producer/consumer pattern
-- **At-least-once Delivery**: Ensures message processing
-- **Subject-based Routing**: `sms.send` and `sms.dlq` subjects
-- **Clustering Ready**: Built-in high availability support
-
-## Data Models
-
-### Message Lifecycle States
-
+### Message Status Flow
 ```
 QUEUED → SENDING → SENT → DELIVERED
-   │        │        │        
-   │        ▼        ▼        
-   └──→ FAILED_TEMP ──→ FAILED_PERM
-              │
-              └──→ [RETRY] → SENDING
+   ↓        ↓        ↓        
+FAILED_TEMP → FAILED_PERM
 ```
 
-### Credit Lifecycle
-
-```
-Available Credits
-       │
-       ▼ (Message Send)
-   HELD Credits
-       │
-   ┌───┴───┐
-   ▼       ▼
-CAPTURED  RELEASED
-(Success) (Failure)
+### Credit Lock
+```go
+type CreditLock struct {
+    ID        uuid.UUID `json:"id"`
+    ClientID  uuid.UUID `json:"client_id"`
+    MessageID uuid.UUID `json:"message_id"`
+    Amount    int64     `json:"amount"`
+    State     string    `json:"state"` // HELD, CAPTURED, RELEASED
+}
 ```
 
-### Database Schema
+## 🔄 Message Processing Flow
 
-```sql
--- Client accounts
-CREATE TABLE clients (
-    id uuid PRIMARY KEY,
-    name text NOT NULL,
-    api_key_hash text NOT NULL UNIQUE,
-    credit_cents bigint NOT NULL DEFAULT 0,
-    dlr_callback_url text,
-    callback_hmac_secret text
-);
-
--- Message records  
-CREATE TABLE messages (
-    id uuid PRIMARY KEY,
-    client_id uuid REFERENCES clients(id),
-    to_msisdn text NOT NULL,
-    text text NOT NULL,
-    status text NOT NULL,
-    parts int NOT NULL,
-    provider_message_id text,
-    attempts int DEFAULT 0,
-    created_at timestamptz DEFAULT now(),
-    updated_at timestamptz DEFAULT now()
-);
-
--- Credit transactions
-CREATE TABLE credit_locks (
-    id uuid PRIMARY KEY,
-    client_id uuid REFERENCES clients(id),
-    message_id uuid REFERENCES messages(id),
-    amount_cents bigint NOT NULL,
-    state text NOT NULL -- HELD/CAPTURED/RELEASED
-);
-
--- Idempotency tracking
-CREATE TABLE idempotency_keys (
-    client_id uuid NOT NULL,
-    key text NOT NULL,
-    message_id uuid NOT NULL,
-    PRIMARY KEY (client_id, key)
-);
+### 1. Message Submission
+```
+Client Request → Validation → Cost Calculation → Message Creation → Credit Hold → Queue
 ```
 
-## API Design
+### 2. Message Processing
+```
+Queue → Provider Send → Status Update → DLR Webhook → Final Status → Credit Finalization
+```
+
+### 3. Credit Flow
+```
+Available Credits → Hold (Deduct) → Capture (Finalize) OR Release (Return)
+```
+
+## 🔧 API Design
 
 ### RESTful Principles
+- **Resource-based URLs**: `/v1/messages`, `/v1/me`
+- **HTTP Methods**: GET, POST for appropriate operations
+- **Status Codes**: Meaningful HTTP status codes
+- **JSON**: Consistent JSON request/response format
 
-- **Resource-based URLs**: `/v1/messages/{id}`
-- **HTTP Verbs**: GET for retrieval, POST for creation
-- **Status Codes**: Proper HTTP response codes
-- **Content Negotiation**: JSON request/response bodies
+### Request/Response Examples
 
-### Authentication Strategy
+#### Send Message Request
+```json
+{
+  "client_id": "550e8400-e29b-41d4-a716-446655440000",
+  "to": "+1234567890",
+  "from": "SENDER",
+  "text": "Hello World",
+  "reference": "order-123",
+  "otp": false,
+  "express": false
+}
+```
 
-**API Key Authentication:**
-- Simple and effective for B2B integrations
-- Transmitted via `X-API-Key` header
-- Stored as bcrypt hash for security
-- Constant-time comparison to prevent timing attacks
+#### Send Message Response
+```json
+{
+  "message_id": "123e4567-e89b-12d3-a456-426614174000",
+  "status": "QUEUED",
+  "otp_code": "123456"
+}
+```
 
-### Idempotency Design
+### Error Handling
+```json
+{
+  "error": "insufficient credits",
+  "required": 10
+}
+```
 
-**Mechanisms:**
-- Optional `Idempotency-Key` header
-- 24-hour window for duplicate detection
-- Two-tier storage: Redis (fast) + PostgreSQL (persistent)
-- Returns original response for duplicate requests
+## 💾 Database Design
 
-### Rate Limiting Strategy
+### Tables
 
-**Token Bucket Algorithm:**
-- Per-client rate limiting
-- Configurable RPS and burst limits
-- Redis-backed for shared state
-- Graceful degradation with `Retry-After` header
+#### messages
+```sql
+CREATE TABLE messages (
+    id UUID PRIMARY KEY,
+    client_id UUID NOT NULL,
+    to_msisdn VARCHAR(20) NOT NULL,
+    from_sender VARCHAR(20) NOT NULL,
+    text TEXT NOT NULL,
+    parts INTEGER NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    client_reference VARCHAR(100),
+    provider VARCHAR(50),
+    provider_message_id VARCHAR(100),
+    attempts INTEGER DEFAULT 0,
+    last_error TEXT,
+    express BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+```
 
-## Message Processing Flow
+#### clients
+```sql
+CREATE TABLE clients (
+    id UUID PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    api_key_hash VARCHAR(255) NOT NULL,
+    credit_cents BIGINT NOT NULL DEFAULT 0,
+    dlr_callback_url VARCHAR(500),
+    callback_hmac_secret VARCHAR(255),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
 
-### Synchronous Flow (API)
+#### credit_locks
+```sql
+CREATE TABLE credit_locks (
+    id UUID PRIMARY KEY,
+    client_id UUID NOT NULL REFERENCES clients(id),
+    message_id UUID NOT NULL REFERENCES messages(id),
+    amount_cents BIGINT NOT NULL,
+    state VARCHAR(20) NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
 
-1. **Request Validation**
-   - Parse and validate request body
-   - Authenticate API key
-   - Check rate limits
+### Indexes
+```sql
+CREATE INDEX idx_messages_client_id ON messages(client_id);
+CREATE INDEX idx_messages_status ON messages(status);
+CREATE INDEX idx_messages_provider_msg_id ON messages(provider_message_id);
+CREATE INDEX idx_credit_locks_message_id ON credit_locks(message_id);
+```
 
-2. **Idempotency Check**
-   - Look up idempotency key in cache/database
-   - Return existing response if duplicate
+## 🚀 Scalability Considerations
 
-3. **Credit Validation**
-   - Calculate message cost (parts × price)
-   - Verify sufficient credits
-   - Atomically hold credits
-
-4. **Message Persistence**
-   - Store message with `QUEUED` status
-   - Record idempotency mapping
-   - Enqueue processing job
-
-### Asynchronous Flow (Worker)
-
-1. **Message Consumption**
-   - Subscribe to `sms.send` subject
-   - Deserialize job payload
-   - Load message from database
-
-2. **Provider Communication**  
-   - Update status to `SENDING`
-   - Call provider API
-   - Handle success/failure responses
-
-3. **Retry Logic**
-   - Exponential backoff for temporary failures
-   - Maximum attempt limits
-   - Dead letter queue for permanent failures
-
-4. **DLR Processing**
-   - Capture/release credits based on final status
-   - Update message status
-   - Trigger client callbacks
-
-## Scalability & Performance
-
-### Target Performance
-- **Throughput**: ~100 TPS sustained
-- **Latency**: <100ms for API requests
-- **Availability**: 99.9% uptime SLA
-
-### Horizontal Scaling Strategies
-
-**API Service Scaling:**
-- Stateless design enables infinite horizontal scaling
-- Load balancer distributes traffic across instances
-- Shared state in Redis and PostgreSQL
-
-**Worker Service Scaling:**
-- Queue-based processing allows multiple consumers
-- Each worker processes messages independently
-- Automatic load balancing via NATS
-
-**Database Scaling:**
-- Read replicas for query offloading
-- Connection pooling to limit resource usage
-- Partitioning strategies for high-volume tables
+### Horizontal Scaling
+- **Stateless API**: No session state in API servers
+- **Database Connection Pooling**: Efficient database connections
+- **Message Queue**: NATS for distributed processing
+- **Load Balancing**: Multiple API instances
 
 ### Performance Optimizations
+- **Connection Pooling**: Database and Redis connections
+- **Async Processing**: Message queue for heavy operations
+- **Caching**: Redis for frequently accessed data
+- **Indexing**: Optimized database queries
 
-**Database:**
-- Indexed queries on common access patterns
-- Connection pooling (25 max, 5 min idle)
-- Query timeout enforcement
+### Capacity Planning
+- **100 TPS**: Target throughput
+- **100M messages/day**: Daily volume capacity
+- **Database Partitioning**: By date for large volumes
+- **Archive Strategy**: Move old messages to cold storage
 
-**Caching:**
-- Redis for hot data (rate limits, idempotency)
-- Connection reuse and pooling
-- TTL-based cache invalidation
-
-**Application:**
-- Structured logging with sampling
-  
-- Graceful shutdown handling
-
-## Reliability & Fault Tolerance
-
-### Error Handling Strategy
-
-**Transient Failures:**
-- Exponential backoff with jitter
-- Maximum retry attempts (10)
-- Circuit breaker patterns (future)
-
-**Permanent Failures:**
-- Dead letter queue for analysis
-- Credit refunds for failed messages
-- Client notification via callbacks
-
-### Data Consistency
-
-**Financial Operations:**
-- PostgreSQL transactions for credit operations
-- Two-phase commit for hold/capture/release
-- Audit trail for all financial transactions
-
-**Message Delivery:**
-- At-least-once processing guarantee
-- Idempotency for duplicate protection
-- Compensating transactions for failures
-
-### High Availability
-
-**Service Level:**
-- Multiple instances behind load balancer  
-- Health checks and automatic failover
-- Graceful shutdown with request draining
-
-**Data Level:**
-- PostgreSQL with streaming replication
-- Redis with master-slave configuration
-- NATS clustering for queue availability
-
-## Security
-
-### Authentication & Authorization
-- API key authentication with secure hashing
-- Rate limiting to prevent abuse
-- Input validation and sanitization
+## 🔒 Security
 
 ### Data Protection
-- Encrypted connections (TLS)
-- Secure storage of sensitive data
-- HMAC-signed client callbacks
+- **Input Validation**: All API inputs validated
+- **SQL Injection Prevention**: Parameterized queries
+- **Rate Limiting**: Per-client request limits (future)
+- **TLS**: Encrypted connections in production
 
-### Network Security
-- Container-based isolation
-- Internal service communication
-- Firewall rules and network policies
+### Authentication (Removed)
+- **No Authentication**: As per requirements
+- **Client ID**: Simple client identification
+- **Future**: Can add API key authentication if needed
 
-## Observability
+## 📊 Monitoring & Observability
 
-### Metrics
-Not included.
-- **Business Metrics**: Message throughput, delivery rates
-- **Technical Metrics**: Response times, error rates
-- **Infrastructure Metrics**: CPU, memory, connection pools
-
-### Logging (Structured JSON)
-- **Correlation IDs**: Request and message tracing
-- **Contextual Data**: Client ID, message ID, timestamps
-- **Error Details**: Stack traces and diagnostic information
+### Logging
+- **Structured Logging**: JSON format with slog
+- **Request Tracing**: Request ID tracking
+- **Error Logging**: Comprehensive error information
+- **Performance Logging**: Response times
 
 ### Health Checks
-- **Liveness**: Basic service health (`/healthz`)
-- **Readiness**: Dependency health (`/readyz`)  
-- **Custom**: Database, queue, cache connectivity
+- **Liveness**: `/health` endpoint
+- **Readiness**: `/ready` with dependency checks
+- **Database Health**: Connection testing
 
-### Tracing (disabled)
-- **Distributed Tracing**: Request flow across services
-- **Performance Analysis**: Bottleneck identification
-- **Dependency Mapping**: Service interaction visualization
+### Metrics (Future)
+- **Request Metrics**: Rate, latency, errors
+- **Business Metrics**: Messages sent, delivery rates
+- **System Metrics**: CPU, memory, connections
 
-## Future Architecture Considerations
+## 🧪 Testing Strategy
 
-### Multi-Provider Support
+### Test Pyramid
+```
+    ┌─────────────┐
+    │     E2E     │  ← Full API workflow tests
+    ├─────────────┤
+    │ Integration │  ← Database, queue, external services
+    ├─────────────┤
+    │    Unit     │  ← Business logic, utilities
+    └─────────────┘
+```
 
-**Architecture Changes:**
-- Provider abstraction layer with pluggable adapters
-- Routing engine for provider selection
-- Fallback chains for high availability
+### E2E Test Coverage
+- **API Endpoints**: All REST endpoints
+- **Business Flows**: Complete message lifecycle
+- **Error Scenarios**: Invalid requests, failures
+- **Edge Cases**: Boundary conditions
 
-**Provider Selection Criteria:**
-- Geographic routing rules
-- Cost optimization algorithms
-- Success rate and latency metrics
+### Test Environment
+- **Isolated**: Separate test database
+- **Repeatable**: Tests can run multiple times
+- **Fast**: Quick feedback loop
+- **Comprehensive**: High coverage
 
-### Advanced Scheduling
+## 🚢 Deployment
 
-**Persistent Scheduler:**
-- Database-backed job scheduling
-- Cron-like expressions for recurring messages
-- Timezone-aware delivery windows
+### Container Strategy
+- **Docker**: Containerized application
+- **Docker Compose**: Local development
+- **Multi-stage Build**: Optimized images
 
-**Delivery Optimization:**
-- Bulk message batching
-- Carrier-specific rate limiting
-- Time-zone aware scheduling
+### Environment Management
+- **Configuration**: Environment variables
+- **Secrets**: Secure credential management
+- **Database Migrations**: Automated schema updates
 
-### Enhanced Analytics
+### Production Deployment
+- **Health Checks**: Kubernetes readiness/liveness probes
+- **Rolling Updates**: Zero-downtime deployments
+- **Resource Limits**: CPU and memory constraints
+- **Monitoring**: Application and infrastructure monitoring
 
-**Real-time Dashboard:**
-- Message delivery statistics
-- Revenue and usage metrics
-- Geographic delivery patterns
+## 🔮 Future Enhancements
 
-**Alerting System:**
-- Threshold-based alerts
-- Anomaly detection
-- Integration with monitoring tools
+### Short Term
+- **Real SMS Providers**: Twilio, AWS SNS integration
+- **Webhook Callbacks**: Client notification system
+- **Rate Limiting**: Per-client request throttling
+- **Metrics Dashboard**: Operational visibility
 
-### Compliance & Governance
+### Medium Term
+- **Multi-tenancy**: Isolated client environments
+- **Message Templates**: Predefined message formats
+- **Scheduling**: Delayed message sending
+- **A/B Testing**: Provider performance comparison
 
-**Regulatory Compliance:**
-- GDPR data protection
-- TCPA compliance for US markets
-- Opt-out management systems
+### Long Term
+- **Global Distribution**: Multi-region deployment
+- **Machine Learning**: Delivery optimization
+- **Advanced Analytics**: Business intelligence
+- **Self-healing**: Automated failure recovery
 
-**Audit & Compliance:**
-- Complete message audit trails
-- Compliance reporting capabilities
-- Data retention policies
+---
 
-### Microservices Evolution
-
-**Service Decomposition:**
-- Separate billing service
-- Dedicated analytics service
-- External notification service
-
-**API Gateway:**
-- Centralized routing and load balancing
-- Authentication and rate limiting
-- API versioning and documentation
-
-This design document represents the current architecture and provides a roadmap for future enhancements to support enterprise-scale SMS operations.
+This design provides a solid foundation for a production-grade SMS Gateway system that can scale to handle high volumes while maintaining reliability and performance.

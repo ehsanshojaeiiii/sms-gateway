@@ -1,60 +1,40 @@
-.PHONY: run test build clean
+.PHONY: run test build clean seed api-test stop logs status
 
-# Simple SMS Gateway Makefile
-
-run: ## Start everything (infrastructure + services)
+run: ## Start SMS Gateway
 	@echo "🚀 Starting SMS Gateway..."
 	@docker-compose up --build -d
 	@sleep 10
 	@$(MAKE) seed
 	@echo "✅ SMS Gateway running on http://localhost:8080"
-	@echo "🔑 Demo API Key: secret"
+	@echo "📋 Test with: curl -X POST http://localhost:8080/v1/messages -H 'Content-Type: application/json' -d '{\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"to\":\"+1234567890\",\"from\":\"TEST\",\"text\":\"Hello SMS!\"}'"
 
-seed: ## Seed database (tables + demo client)
-	@echo "📊 Setting up demo client..."
-	@docker-compose exec postgres psql -U postgres -d sms_gateway -c "\
-		CREATE EXTENSION IF NOT EXISTS pgcrypto; \
-		CREATE TABLE IF NOT EXISTS clients ( \
-			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), \
-			name text NOT NULL, \
-			api_key_hash text NOT NULL UNIQUE, \
-			credit_cents bigint NOT NULL DEFAULT 0 \
-		); \
-		CREATE TABLE IF NOT EXISTS messages ( \
-			id uuid PRIMARY KEY DEFAULT gen_random_uuid(), \
-			client_id uuid NOT NULL, \
-			to_msisdn text NOT NULL, \
-			from_sender text NOT NULL, \
-			text text NOT NULL, \
-			parts int NOT NULL DEFAULT 1, \
-			status text NOT NULL DEFAULT 'QUEUED', \
-			client_reference text NULL, \
-			created_at timestamptz NOT NULL DEFAULT now(), \
-			updated_at timestamptz NOT NULL DEFAULT now() \
-		); \
-		INSERT INTO clients (id, name, api_key_hash, credit_cents) \
-		VALUES ('550e8400-e29b-41d4-a716-446655440000', 'Demo Client', '$$2a$$10$$N9qo8uLOickgx2ZMRZoMye/6lrVqaOZFJl.p6pznXiKlrDVrF.6Vi', 100000) \
-		ON CONFLICT (api_key_hash) DO NOTHING; \
-		INSERT INTO clients (id, name, api_key_hash, credit_cents) \
-		VALUES ('660e8400-e29b-41d4-a716-446655440000', 'User Two', 'user2', 5000) \
-		ON CONFLICT (api_key_hash) DO NOTHING;" 2>/dev/null || echo "Database setup complete"
+seed: ## Seed demo data
+	@echo "📊 Setting up demo data..."
+	@docker-compose exec postgres psql -U postgres -d sms_gateway -f /app/scripts/seed.sql || echo "Database setup complete"
 
-test: ## Run all tests and API tests
-	@echo "🧪 Running Go tests..."
-	@go test -v ./...
-	@echo "🔍 Testing API endpoints..."
-	@make api-test
+test: ## Run all tests (cached if unchanged)
+	@echo "🧪 Running unit tests..."
+	@go test -v ./internal/messages ./internal/billing ./internal/api
+	@echo "🔍 Running integration tests..."
+	@go test -v ./test
+	@echo "✅ All tests passed - SMS Gateway is ready!"
 
-api-test: ## Test API endpoints
-	@echo "1. Health check:"
-	@curl -s http://localhost:8080/healthz || echo "❌ API not responding"
-	@echo -e "\n2. Client info:"
-	@curl -s -H "X-API-Key: secret" http://localhost:8080/v1/me || echo "❌ Auth failed"
-	@echo -e "\n3. Send SMS:"
+test-fresh: ## Run all tests fresh (no cache)
+	@echo "🧪 Running unit tests (fresh)..."
+	@go test -count=1 -v ./internal/messages ./internal/billing ./internal/api
+	@echo "🔍 Running integration tests (fresh)..."
+	@go test -count=1 -v ./test
+	@echo "✅ All tests passed fresh - SMS Gateway is ready!"
+
+api-test: ## Test API endpoints  
+	@echo "🔍 Testing API..."
+	@curl -s http://localhost:8080/health || echo "❌ API not responding"
+	@echo -e "\n📊 Client info:"
+	@curl -s "http://localhost:8080/v1/me?client_id=550e8400-e29b-41d4-a716-446655440000" || echo "❌ Client info failed"
+	@echo -e "\n📨 Send SMS:"
 	@curl -s -X POST http://localhost:8080/v1/messages \
 		-H "Content-Type: application/json" \
-		-H "X-API-Key: secret" \
-		-d '{"to":"+1234567890","from":"TEST","text":"Hello SMS Gateway!"}' || echo "❌ SMS send failed"
+		-d '{"client_id":"550e8400-e29b-41d4-a716-446655440000","to":"+1234567890","from":"TEST","text":"Hello SMS Gateway!"}' || echo "❌ SMS send failed"
 	@echo -e "\n✅ API tests complete"
 
 build: ## Build binaries
@@ -63,16 +43,16 @@ build: ## Build binaries
 	@go build -o worker ./cmd/worker
 	@echo "✅ Binaries built: api, worker"
 
-stop: ## Stop all services
+stop: ## Stop services
 	@docker-compose down -v
 
 clean: ## Clean everything
 	@docker-compose down -v --rmi local
-	@rm -f api worker
+	@rm -f api
 	@echo "🧹 Cleanup complete"
 
 logs: ## Show logs
 	@docker-compose logs -f
 
-status: ## Show service status
+status: ## Show status
 	@docker-compose ps

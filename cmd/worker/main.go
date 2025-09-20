@@ -2,155 +2,80 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sms-gateway/internal/billing"
 	"sms-gateway/internal/config"
+	"sms-gateway/internal/db"
 	"sms-gateway/internal/messages"
-	"sms-gateway/internal/observability"
-	"sms-gateway/internal/persistence"
-	"sms-gateway/internal/provider/mock"
-	"sms-gateway/internal/queue/nats"
+	"sms-gateway/internal/messaging/nats"
+	"sms-gateway/internal/providers/mock"
+	"sms-gateway/internal/worker"
 	"syscall"
 	"time"
-
-	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
 
 func main() {
-	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatal("Failed to load config:", err)
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Setup logger
-	logger := observability.GetLoggerFromEnv()
-	defer logger.Sync()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger.Info("Starting SMS Gateway Worker", "version", "1.0.0")
 
-	logger.Info("starting SMS Gateway Worker",
-		zap.String("log_level", cfg.LogLevel))
-
-	// Setup metrics
-	var metrics *observability.Metrics
-	if cfg.MetricsEnabled {
-		metrics = observability.NewMetrics()
-	}
-
-	// Setup database connections
+	// Database
 	ctx := context.Background()
-
-	postgres, err := persistence.NewPostgres(ctx, cfg.PostgresURL)
+	database, err := db.NewPostgres(ctx, cfg.PostgresURL)
 	if err != nil {
-		logger.Fatal("failed to connect to postgres", zap.Error(err))
+		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer postgres.Close()
+	defer database.Close()
 
-	// Setup queue
+	// Redis
+	redis, err := db.NewRedis(ctx, cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
+	defer redis.Close()
+
+	// NATS
 	queue, err := nats.NewQueue(cfg.NATSURL, logger)
 	if err != nil {
-		logger.Fatal("failed to connect to NATS", zap.Error(err))
+		log.Fatalf("Failed to connect to NATS: %v", err)
 	}
 	defer queue.Close()
 
-	// Setup provider
-	provider := mock.NewProvider(
-		logger,
-		cfg.MockSuccessRate,
-		cfg.MockTempFailRate,
-		cfg.MockPermFailRate,
-		cfg.MockLatencyMs,
-	)
+	// Services
+	store := messages.NewStore(database, logger)
+	billingService := billing.NewService(database, logger)
 
-	// Initialize services
-	messageStore := messages.NewStore(postgres, logger)
-	billingService := billing.NewBillingService(postgres, logger)
+	// SMS Provider
+	provider := mock.NewProvider()
 
-	// Initialize worker service
-	workerService := messages.NewWorkerService(
-		logger,
-		metrics,
-		messageStore,
-		billingService,
-		queue,
-		provider,
-		cfg,
-	)
+	// Worker (simplified for interview demo)
+	w := worker.NewSimple(logger, store, billingService, queue, provider, cfg)
 
-	// Create worker pool for concurrent message processing
-	const numWorkers = 5
-	jobChan := make(chan *nats.SendJob, 100) // Buffered channel for jobs
-
-	// Start worker pool
-	for i := 0; i < numWorkers; i++ {
-		go func(workerID int) {
-			logger.Info("worker started", zap.Int("worker_id", workerID))
-			for job := range jobChan {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
-				logger.Debug("worker processing job",
-					zap.Int("worker_id", workerID),
-					zap.String("message_id", job.MessageID.String()))
-
-				if err := workerService.ProcessMessage(ctx, job); err != nil {
-					logger.Error("worker failed to process message job",
-						zap.Int("worker_id", workerID),
-						zap.String("message_id", job.MessageID.String()),
-						zap.Int("attempt", job.Attempt),
-						zap.Error(err))
-				}
-				cancel()
-			}
-		}(i)
+	// Start worker
+	if err := w.Start(ctx); err != nil {
+		log.Fatalf("Failed to start worker: %v", err)
 	}
 
-	// Subscribe to send jobs and feed them to worker pool
-	subscription, err := queue.SubscribeSendJobs(func(job *nats.SendJob) error {
-		// Non-blocking send to worker pool
-		select {
-		case jobChan <- job:
-			return nil
-		default:
-			logger.Warn("worker pool full, dropping job", zap.String("message_id", job.MessageID.String()))
-			return fmt.Errorf("worker pool saturated")
-		}
-	})
-
-	if err != nil {
-		logger.Fatal("failed to subscribe to send jobs", zap.Error(err))
-	}
-	defer subscription.Unsubscribe()
-
-	// Subscribe to DLQ for monitoring (optional)
-	dlqSubscription, err := queue.SubscribeDLQJobs(func(messageID uuid.UUID, reason string, timestamp time.Time) {
-		logger.Warn("message sent to DLQ",
-			zap.String("message_id", messageID.String()),
-			zap.String("reason", reason),
-			zap.Time("timestamp", timestamp))
-	})
-
-	if err != nil {
-		logger.Error("failed to subscribe to DLQ", zap.Error(err))
-	} else {
-		defer dlqSubscription.Unsubscribe()
-	}
-
-	logger.Info("worker started, waiting for messages...")
+	logger.Info("SMS Gateway Worker started")
 
 	// Graceful shutdown
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
 
-	<-c
-	logger.Info("shutting down worker...")
+	logger.Info("Shutting down SMS Gateway Worker...")
 
-	// Close job channel to stop workers
-	close(jobChan)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	// Give ongoing jobs time to complete
-	time.Sleep(5 * time.Second)
-	logger.Info("worker shutdown complete")
+	w.Stop(ctx)
+
+	logger.Info("SMS Gateway Worker stopped")
 }

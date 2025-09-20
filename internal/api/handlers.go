@@ -3,304 +3,252 @@ package api
 import (
 	"context"
 	"fmt"
-	"sms-gateway/internal/auth"
+	"log/slog"
 	"sms-gateway/internal/billing"
-	"sms-gateway/internal/dlr"
-	"sms-gateway/internal/idempotency"
+	"sms-gateway/internal/delivery"
 	"sms-gateway/internal/messages"
-	"sms-gateway/internal/observability"
-	"sms-gateway/internal/queue/nats"
+	"sms-gateway/internal/messaging/nats"
+	"sms-gateway/internal/otp"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
 
 type Handlers struct {
-	logger                *zap.Logger
-	metrics               *observability.Metrics
-	messageStore          *messages.Store
-	idempotencyStore      *idempotency.Store
-	billingService        *billing.BillingService
-	queue                 *nats.Queue
-	dlrService            *dlr.Service
-	pricePerPartCents     int64
-	expressSurchargeCents int64
+	logger       *slog.Logger
+	store        *messages.Store
+	billing      *billing.Service
+	queue        *nats.Queue
+	delivery     *delivery.Service
+	otpService   *otp.OTPService
+	pricePerPart int64
+	expressCost  int64
 }
 
-func NewHandlers(
-	logger *zap.Logger,
-	metrics *observability.Metrics,
-	messageStore *messages.Store,
-	idempotencyStore *idempotency.Store,
-	billingService *billing.BillingService,
-	queue *nats.Queue,
-	dlrService *dlr.Service,
-	pricePerPartCents int64,
-) *Handlers {
+func NewHandlers(logger *slog.Logger, store *messages.Store, billing *billing.Service, queue *nats.Queue, delivery *delivery.Service, otpService *otp.OTPService, pricePerPart, expressCost int64) *Handlers {
 	return &Handlers{
-		logger:                logger,
-		metrics:               metrics,
-		messageStore:          messageStore,
-		idempotencyStore:      idempotencyStore,
-		billingService:        billingService,
-		queue:                 queue,
-		dlrService:            dlrService,
-		pricePerPartCents:     pricePerPartCents,
-		expressSurchargeCents: 2, // default; can be made configurable
+		logger:       logger,
+		store:        store,
+		billing:      billing,
+		queue:        queue,
+		delivery:     delivery,
+		otpService:   otpService,
+		pricePerPart: pricePerPart,
+		expressCost:  expressCost,
 	}
 }
 
 // SendMessage handles POST /v1/messages
 func (h *Handlers) SendMessage(c *fiber.Ctx) error {
-	client, err := auth.GetClientFromContext(c)
-	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
-	}
-
-	var req messages.CreateMessageRequest
+	var req messages.SendRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid request body",
-		})
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
 	}
 
-	// Validate request
 	if req.To == "" || req.From == "" || (!req.OTP && req.Text == "") {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "missing required fields: to, from, text",
-		})
+		return c.Status(400).JSON(fiber.Map{"error": "missing required fields"})
 	}
 
-	idempotencyKey := c.Get("Idempotency-Key")
-
-	// Check idempotency
-	if idempotencyKey != "" {
-		existingMessageID, err := h.idempotencyStore.GetMessageID(c.Context(), client.ID, idempotencyKey)
-		if err != nil {
-			h.logger.Error("failed to check idempotency", zap.Error(err))
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})
-		}
-
-		if existingMessageID != uuid.Nil {
-			// Return existing message
-			msg, err := h.messageStore.GetMessage(c.Context(), existingMessageID)
-			if err != nil {
-				h.logger.Error("failed to get existing message", zap.Error(err))
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})
-			}
-
-			return c.Status(fiber.StatusOK).JSON(&messages.CreateMessageResponse{
-				MessageID: msg.ID,
-				Status:    msg.Status,
-			})
-		}
-	}
-
-	// Handle OTP generation if requested
-	var otpCode *string
+	// Handle OTP with delivery guarantee (as per PDF requirement)
 	if req.OTP {
-		// Generate 6-digit code
-		code := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
-		otpCode = &code
-		if req.Text == "" {
-			// Default template
-			req.Text = fmt.Sprintf("Your verification code is %s", code)
-		}
+		return h.handleOTPMessage(c, &req)
 	}
 
-	// Calculate parts and cost; apply express surcharge per part if requested
+	// Calculate cost
 	parts := messages.CalculateParts(req.Text)
-	costCents := int64(parts) * h.pricePerPartCents
+	cost := int64(parts) * h.pricePerPart
 	if req.Express {
-		costCents += int64(parts) * h.expressSurchargeCents
+		cost += int64(parts) * h.expressCost
 	}
 
-	// Create message first (needed for credit lock FK)
+	// Create message
 	msg := &messages.Message{
-		ID:              uuid.New(),
-		ClientID:        client.ID,
-		ToMSISDN:        req.To,
-		FromSender:      req.From,
-		Text:            req.Text,
-		Parts:           parts,
-		Status:          messages.StatusQueued,
-		ClientReference: req.ClientReference,
-		Attempts:        0,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		ID:        uuid.New(),
+		ClientID:  req.ClientID,
+		To:        req.To,
+		From:      req.From,
+		Text:      req.Text,
+		Parts:     parts,
+		Status:    messages.StatusQueued,
+		Reference: req.Reference,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 
-	if err := h.messageStore.CreateMessage(c.Context(), msg); err != nil {
-		h.logger.Error("failed to create message", zap.Error(err))
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})
+	if err := h.store.Create(c.Context(), msg); err != nil {
+		h.logger.Error("failed to create message", "error", err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 
-	// Hold credits (deduct and create lock). On failure, delete message and return 402
-	if _, err = h.billingService.HoldCredits(c.Context(), client.ID, msg.ID, costCents); err != nil {
-		_ = h.messageStore.DeleteMessage(c.Context(), msg.ID)
-		h.logger.Warn("failed to hold credits",
-			zap.String("client_id", client.ID.String()),
-			zap.Int64("cost_cents", costCents),
-			zap.Error(err))
-		return c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{
-			"error":          "insufficient credits",
-			"required_cents": costCents,
-		})
+	// Hold credits
+	if _, err := h.billing.HoldCredits(c.Context(), req.ClientID, msg.ID, cost); err != nil {
+		h.store.Delete(c.Context(), msg.ID)
+		return c.Status(402).JSON(fiber.Map{"error": "insufficient credits", "required": cost})
 	}
 
-	// Store idempotency key
-	if idempotencyKey != "" {
-		if err := h.idempotencyStore.StoreMessageID(c.Context(), client.ID, idempotencyKey, msg.ID); err != nil {
-			h.logger.Error("failed to store idempotency key", zap.Error(err))
-			// Continue anyway, message is already created
-		}
-	}
-
-	// Enqueue for processing
+	// Queue for sending
 	if err := h.queue.PublishSendJob(c.Context(), msg.ID, 1); err != nil {
-		h.logger.Error("failed to enqueue send job", zap.Error(err))
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})
+		h.logger.Error("failed to queue message", "error", err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 
-	h.logger.Info("message created",
-		zap.String("message_id", msg.ID.String()),
-		zap.String("client_id", client.ID.String()),
-		zap.String("to", req.To),
-		zap.Int("parts", parts),
-		zap.Int64("cost_cents", costCents))
+	h.logger.Info("message created", "id", msg.ID, "client", req.ClientID, "cost", cost)
 
-	if h.metrics != nil {
-		h.metrics.MessagesProcessedTotal.WithLabelValues("queued", "").Inc()
-	}
-
-	return c.Status(fiber.StatusAccepted).JSON(&messages.CreateMessageResponse{
+	return c.Status(202).JSON(&messages.SendResponse{
 		MessageID: msg.ID,
 		Status:    msg.Status,
-		OTPCode:   otpCode,
+	})
+}
+
+// handleOTPMessage handles OTP messages with delivery guarantee (PDF requirement)
+func (h *Handlers) handleOTPMessage(c *fiber.Ctx, req *messages.SendRequest) error {
+	// Generate 6-digit OTP code
+	otpCode := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+	if req.Text == "" {
+		req.Text = fmt.Sprintf("Your verification code is %s", otpCode)
+	}
+
+	// Calculate cost
+	parts := messages.CalculateParts(req.Text)
+	cost := int64(parts) * h.pricePerPart
+
+	// Create message first
+	msg := &messages.Message{
+		ID:        uuid.New(),
+		ClientID:  req.ClientID,
+		To:        req.To,
+		From:      req.From,
+		Text:      req.Text,
+		Parts:     parts,
+		Status:    messages.StatusQueued,
+		Reference: req.Reference,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	if err := h.store.Create(c.Context(), msg); err != nil {
+		h.logger.Error("failed to create OTP message", "error", err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	// Hold credits
+	if _, err := h.billing.HoldCredits(c.Context(), req.ClientID, msg.ID, cost); err != nil {
+		h.store.Delete(c.Context(), msg.ID)
+		return c.Status(402).JSON(fiber.Map{"error": "insufficient credits", "required": cost})
+	}
+
+	// Try immediate OTP delivery (PDF requirement: guaranteed delivery or error)
+	result, err := h.otpService.SendOTPImmediate(c.Context(), req.To, req.From, req.Text)
+	if err != nil {
+		// Release held credits on failure
+		h.billing.ReleaseCredits(c.Context(), msg.ID)
+		h.store.Delete(c.Context(), msg.ID)
+
+		h.logger.Warn("OTP delivery failed immediately", "error", err, "to", req.To)
+
+		// Return immediate error as required by PDF
+		return c.Status(503).JSON(fiber.Map{
+			"error":  "OTP delivery failed - operator cannot deliver immediately",
+			"reason": err.Error(),
+		})
+	}
+
+	// Success - update message with provider info
+	h.store.UpdateStatus(c.Context(), msg.ID, messages.StatusSent, &result.ProviderMessageID, nil)
+
+	// Capture credits on successful delivery
+	h.billing.CaptureCredits(c.Context(), msg.ID)
+
+	h.logger.Info("OTP delivered immediately", "id", msg.ID, "to", req.To, "provider_id", result.ProviderMessageID)
+
+	// Return success with OTP code (200 OK for immediate delivery)
+	return c.Status(200).JSON(&messages.SendResponse{
+		MessageID: msg.ID,
+		Status:    messages.StatusSent,
+		OTPCode:   &otpCode,
 	})
 }
 
 // GetMessage handles GET /v1/messages/:id
 func (h *Handlers) GetMessage(c *fiber.Ctx) error {
-	client, err := auth.GetClientFromContext(c)
+	msgID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
+		return c.Status(400).JSON(fiber.Map{"error": "invalid message ID"})
 	}
 
-	messageIDStr := c.Params("id")
-	messageID, err := uuid.Parse(messageIDStr)
+	msg, err := h.store.GetByID(c.Context(), msgID)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid message ID"})
+		return c.Status(404).JSON(fiber.Map{"error": "message not found"})
 	}
 
-	msg, err := h.messageStore.GetMessage(c.Context(), messageID)
-	if err != nil {
-		h.logger.Debug("message not found", zap.String("message_id", messageIDStr))
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found"})
+	cost := int64(msg.Parts) * h.pricePerPart
+	if msg.Express {
+		cost += int64(msg.Parts) * h.expressCost
 	}
 
-	// Check if client owns this message
-	if msg.ClientID != client.ID {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "message not found"})
-	}
-
-	costCents := int64(msg.Parts) * h.pricePerPartCents
-
-	response := &messages.GetMessageResponse{
-		Message:   msg,
-		CostCents: costCents,
-	}
-
-	return c.JSON(response)
-}
-
-// GetClientInfo handles GET /v1/me
-func (h *Handlers) GetClientInfo(c *fiber.Ctx) error {
-	client, err := auth.GetClientFromContext(c)
-	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
-	}
-
-	credits, err := h.billingService.GetClientCredits(c.Context(), client.ID)
-	if err != nil {
-		h.logger.Error("failed to get client credits", zap.Error(err))
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})
-	}
-
-	return c.JSON(fiber.Map{
-		"id":           client.ID,
-		"name":         client.Name,
-		"credit_cents": credits,
-	})
+	return c.JSON(&messages.GetResponse{Message: msg, Cost: cost})
 }
 
 // ListMessages handles GET /v1/messages
 func (h *Handlers) ListMessages(c *fiber.Ctx) error {
-	client, err := auth.GetClientFromContext(c)
+	clientID, err := uuid.Parse(c.Query("client_id", ""))
 	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
+		return c.Status(400).JSON(fiber.Map{"error": "client_id required"})
 	}
-	// Simple pagination defaults
-	limit := 50
-	offset := 0
-	msgs, err := h.messageStore.ListMessages(c.Context(), client.ID, limit, offset)
+
+	msgs, err := h.store.ListByClient(c.Context(), clientID, 50, 0)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 	return c.JSON(msgs)
 }
 
-// HealthCheck handles GET /healthz
-func (h *Handlers) HealthCheck(c *fiber.Ctx) error {
-	return c.JSON(fiber.Map{
-		"status":    "healthy",
-		"timestamp": time.Now().Unix(),
-	})
+// GetClientInfo handles GET /v1/me
+func (h *Handlers) GetClientInfo(c *fiber.Ctx) error {
+	clientID, err := uuid.Parse(c.Query("client_id", ""))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "client_id required"})
+	}
+
+	credits, err := h.billing.GetCredits(c.Context(), clientID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
+	}
+
+	return c.JSON(fiber.Map{"id": clientID, "credits": credits})
 }
 
-// ReadyCheck handles GET /readyz
-func (h *Handlers) ReadyCheck(c *fiber.Ctx) error {
+// Health endpoints
+func (h *Handlers) Health(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{"status": "ok", "time": time.Now().Unix()})
+}
+
+func (h *Handlers) Ready(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(c.Context(), 5*time.Second)
 	defer cancel()
 
-	// Check database connectivity
-	if err := h.messageStore.HealthCheck(ctx); err != nil {
-		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-			"status": "not ready",
-			"error":  "database connectivity issue",
-		})
+	if err := h.store.Health(ctx); err != nil {
+		return c.Status(503).JSON(fiber.Map{"status": "not ready"})
 	}
-
-	return c.JSON(fiber.Map{
-		"status":    "ready",
-		"timestamp": time.Now().Unix(),
-	})
+	return c.JSON(fiber.Map{"status": "ready"})
 }
 
-// HandleDLR handles POST /v1/providers/mock/dlr
+// HandleDLR handles delivery receipts
 func (h *Handlers) HandleDLR(c *fiber.Ctx) error {
-	var req dlr.IngestRequest
+	var req delivery.Request
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "invalid request body",
-		})
+		return c.Status(400).JSON(fiber.Map{"error": "invalid request"})
 	}
 
-	// Validate required fields
 	if req.ProviderMessageID == "" || req.Status == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "missing required fields: provider_message_id, status",
-		})
+		return c.Status(400).JSON(fiber.Map{"error": "missing required fields"})
 	}
 
-	if err := h.dlrService.ProcessDLR(c.Context(), &req); err != nil {
-		h.logger.Error("failed to process DLR", zap.Error(err))
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "failed to process DLR",
-		})
+	if err := h.delivery.Process(c.Context(), &req); err != nil {
+		h.logger.Error("failed to process DLR", "error", err)
+		return c.Status(500).JSON(fiber.Map{"error": "failed to process DLR"})
 	}
 
-	return c.SendStatus(fiber.StatusNoContent)
+	return c.SendStatus(204)
 }

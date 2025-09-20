@@ -10,17 +10,16 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o worker ./cmd/worker
+# Build worker
+RUN go build -o worker ./cmd/worker
 
-# Final stage
+# Runtime stage
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /root/
 
-# Copy the binary from builder stage
+# Copy binary
 COPY --from=builder /app/worker .
 
-# Command to run
 CMD ["./worker"]

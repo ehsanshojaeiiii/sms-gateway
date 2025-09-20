@@ -3,120 +3,102 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sms-gateway/internal/api"
-	"sms-gateway/internal/auth"
 	"sms-gateway/internal/billing"
 	"sms-gateway/internal/config"
-	"sms-gateway/internal/dlr"
-	"sms-gateway/internal/idempotency"
+	"sms-gateway/internal/db"
+	"sms-gateway/internal/delivery"
 	"sms-gateway/internal/messages"
-	"sms-gateway/internal/observability"
-	"sms-gateway/internal/persistence"
-	"sms-gateway/internal/queue/nats"
-	"sms-gateway/internal/rate"
+	"sms-gateway/internal/messaging/nats"
+	"sms-gateway/internal/otp"
+	"sms-gateway/internal/providers/mock"
 	"syscall"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"go.uber.org/zap"
 )
 
 func main() {
-	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Initialize logger
-	logger, err := observability.NewLogger(cfg.LogLevel)
-	if err != nil {
-		log.Fatalf("Failed to create logger: %v", err)
-	}
-	defer logger.Sync()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger.Info("Starting SMS Gateway API", "version", "1.0.0")
 
-	logger.Info("Starting SMS Gateway API", zap.String("version", "1.0.0"))
-
-	// Initialize database
+	// Database
 	ctx := context.Background()
-	db, err := persistence.NewPostgres(ctx, cfg.PostgresURL)
+	database, err := db.NewPostgres(ctx, cfg.PostgresURL)
 	if err != nil {
-		logger.Fatal("Failed to connect to database", zap.Error(err))
+		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer db.Close()
+	defer database.Close()
 
-	// Run migrations
-	if err := db.RunMigrations("migrations"); err != nil {
-		logger.Warn("Failed to run migrations (may already be applied)", zap.Error(err))
+	if err := database.RunMigrations("migrations"); err != nil {
+		logger.Warn("Failed to run migrations", "error", err)
 	}
 
-	// Initialize Redis
-	redis, err := persistence.NewRedis(ctx, cfg.RedisURL)
+	// Redis
+	redis, err := db.NewRedis(ctx, cfg.RedisURL)
 	if err != nil {
-		logger.Fatal("Failed to connect to Redis", zap.Error(err))
+		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
 	defer redis.Close()
 
-	// Initialize NATS
+	// NATS
 	queue, err := nats.NewQueue(cfg.NATSURL, logger)
 	if err != nil {
-		logger.Fatal("Failed to connect to NATS", zap.Error(err))
+		log.Fatalf("Failed to connect to NATS: %v", err)
 	}
 	defer queue.Close()
 
-	// Initialize services
-	metrics := observability.NewMetrics()
-	messageStore := messages.NewStore(db, logger)
-	authService := auth.NewAuthService(db, logger)
-	billingService := billing.NewBillingService(db, logger)
-	rateLimiter := rate.NewLimiter(redis, logger, cfg.RateLimitRPS, cfg.RateLimitBurst)
-	idempotencyStore := idempotency.NewStore(db, redis, logger)
+	// Services
+	store := messages.NewStore(database, logger)
+	billingService := billing.NewService(database, logger)
+	deliveryService := delivery.NewService(logger, store, billingService)
 
-	// Initialize DLR service
-	dlrService := dlr.NewService(logger, metrics, messageStore, authService, billingService)
+	// SMS Provider and OTP service for delivery guarantee
+	provider := mock.NewProvider()
+	otpService := otp.NewOTPService(logger, provider)
 
-	// Initialize API handlers
-	handlers := api.NewHandlers(logger, metrics, messageStore, idempotencyStore, billingService, queue, dlrService, cfg.PricePerPartCents)
-	// Pass express surcharge via environment variable in handlers if needed in future
+	// Handlers
+	handlers := api.NewHandlers(logger, store, billingService, queue, deliveryService, otpService, cfg.PricePerPartCents, cfg.ExpressSurchargeCents)
 
-	// Create Fiber app
+	// App
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
-			logger.Error("Fiber error", zap.Error(err))
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Internal server error",
-			})
+			logger.Error("Fiber error", "error", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Internal server error"})
 		},
 	})
 
-	// Setup routes
-	api.SetupRoutes(app, logger, metrics, handlers, authService, rateLimiter)
+	api.SetupRoutes(app, logger, handlers)
 
-	// Start server in a goroutine
+	// Start server
 	go func() {
 		if err := app.Listen(":" + cfg.Port); err != nil {
-			logger.Fatal("Failed to start server", zap.Error(err))
+			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
 
-	logger.Info("SMS Gateway API started", zap.String("port", cfg.Port))
+	logger.Info("SMS Gateway API started", "port", cfg.Port)
 
-	// Wait for interrupt signal
+	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
-	logger.Info("Shutting down SMS Gateway API...")
-
-	// Graceful shutdown with timeout
+	logger.Info("Shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := app.ShutdownWithContext(ctx); err != nil {
-		logger.Error("Failed to shutdown server gracefully", zap.Error(err))
+		logger.Error("Failed to shutdown gracefully", "error", err)
 	}
 
-	logger.Info("SMS Gateway API stopped")
+	logger.Info("SMS Gateway stopped")
 }
