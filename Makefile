@@ -21,6 +21,16 @@ realistic-test: ## Run realistic performance test (PDF compliant)
 	@go test -v ./test -run TestRealisticPerformance
 	@echo "✅ Performance test complete!"
 
+race-test: ## Test race condition and double spending prevention
+	@echo "🔐 Testing race condition protection..."
+	@./fix-race-conditions.sh
+	@echo "✅ Race condition test complete!"
+
+double-spend-test: ## Test double spending prevention under extreme load
+	@echo "💰 Testing double spending prevention..."
+	@go test -v ./test -run TestDoubleSpending -timeout 30s
+	@echo "✅ Double spending test complete!"
+
 build: ## Build binaries
 	@echo "🔨 Building..."
 	@go build -o api ./cmd/api
