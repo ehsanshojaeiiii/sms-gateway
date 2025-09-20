@@ -67,7 +67,7 @@ func main() {
 	defer queue.Close()
 
 	// Initialize services
-    metrics := observability.NewMetrics()
+	metrics := observability.NewMetrics()
 	messageStore := messages.NewStore(db, logger)
 	authService := auth.NewAuthService(db, logger)
 	billingService := billing.NewBillingService(db, logger)
@@ -79,6 +79,7 @@ func main() {
 
 	// Initialize API handlers
 	handlers := api.NewHandlers(logger, metrics, messageStore, idempotencyStore, billingService, queue, dlrService, cfg.PricePerPartCents)
+	// Pass express surcharge via environment variable in handlers if needed in future
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{

@@ -37,7 +37,7 @@ func main() {
 	// Setup metrics
 	var metrics *observability.Metrics
 	if cfg.MetricsEnabled {
-        metrics = observability.NewMetrics()
+		metrics = observability.NewMetrics()
 	}
 
 	// Setup database connections

@@ -264,6 +264,7 @@ func SetupRoutes(
 	// Messages endpoints (requires auth)
 	messages := v1.Group("/messages", authService.RequireAPIKey())
 	messages.Post("/", handlers.SendMessage)
+	messages.Get("/", handlers.ListMessages)
 	messages.Get("/:id", handlers.GetMessage)
 
 	// Provider webhooks (no auth for simplicity, but should have HMAC verification in production)
