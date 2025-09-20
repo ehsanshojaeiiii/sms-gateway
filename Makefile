@@ -33,7 +33,10 @@ seed: ## Seed database (tables + demo client)
 			updated_at timestamptz NOT NULL DEFAULT now() \
 		); \
 		INSERT INTO clients (id, name, api_key_hash, credit_cents) \
-		VALUES ('550e8400-e29b-41d4-a716-446655440000', 'Demo Client', 'secret', 100000) \
+		VALUES ('550e8400-e29b-41d4-a716-446655440000', 'Demo Client', '$$2a$$10$$N9qo8uLOickgx2ZMRZoMye/6lrVqaOZFJl.p6pznXiKlrDVrF.6Vi', 100000) \
+		ON CONFLICT (api_key_hash) DO NOTHING; \
+		INSERT INTO clients (id, name, api_key_hash, credit_cents) \
+		VALUES ('660e8400-e29b-41d4-a716-446655440000', 'User Two', 'user2', 5000) \
 		ON CONFLICT (api_key_hash) DO NOTHING;" 2>/dev/null || echo "Database setup complete"
 
 test: ## Run all tests and API tests

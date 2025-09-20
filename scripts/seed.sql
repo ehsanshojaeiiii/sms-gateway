@@ -18,6 +18,19 @@ INSERT INTO clients (
     'demo-hmac-secret-key'
 ) ON CONFLICT (api_key_hash) DO NOTHING;
 
+-- Insert second client (plaintext key for demo: "user2")
+INSERT INTO clients (
+    id,
+    name,
+    api_key_hash,
+    credit_cents
+) VALUES (
+    '660e8400-e29b-41d4-a716-446655440000',
+    'User Two',
+    'user2',
+    5000
+) ON CONFLICT (api_key_hash) DO NOTHING;
+
 -- Display the created client
 SELECT 
     id,
