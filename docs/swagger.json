@@ -1,0 +1,221 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Production-ready SMS Gateway service implementing all PDF requirements",
+        "title": "SMS Gateway API",
+        "termsOfService": "http://swagger.io/terms/",
+        "contact": {
+            "name": "SMS Gateway Support"
+        },
+        "license": {
+            "name": "MIT"
+        },
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/",
+    "paths": {
+        "/health": {
+            "get": {
+                "description": "Basic health check endpoint",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "Health status",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/me": {
+            "get": {
+                "description": "Get client credit balance and information",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Client"
+                ],
+                "summary": "Get client info",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client ID",
+                        "name": "client_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Client info",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/messages": {
+            "post": {
+                "description": "Send SMS message (regular, OTP, or Express)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Messages"
+                ],
+                "summary": "Send SMS",
+                "parameters": [
+                    {
+                        "description": "SMS request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/messages.SendRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OTP delivered immediately",
+                        "schema": {
+                            "$ref": "#/definitions/messages.SendResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "Message queued",
+                        "schema": {
+                            "$ref": "#/definitions/messages.SendResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "402": {
+                        "description": "Insufficient credits",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "OTP delivery failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "messages.SendRequest": {
+            "type": "object",
+            "required": [
+                "client_id",
+                "from",
+                "to"
+            ],
+            "properties": {
+                "client_id": {
+                    "type": "string"
+                },
+                "express": {
+                    "type": "boolean"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "otp": {
+                    "type": "boolean"
+                },
+                "reference": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "messages.SendResponse": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string"
+                },
+                "otp_code": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/messages.Status"
+                }
+            }
+        },
+        "messages.Status": {
+            "type": "string",
+            "enum": [
+                "QUEUED",
+                "SENDING",
+                "SENT",
+                "DELIVERED",
+                "FAILED_TEMP",
+                "FAILED_PERM",
+                "CANCELLED"
+            ],
+            "x-enum-varnames": [
+                "StatusQueued",
+                "StatusSending",
+                "StatusSent",
+                "StatusDelivered",
+                "StatusFailedTemp",
+                "StatusFailedPerm",
+                "StatusCancelled"
+            ]
+        }
+    }
+}

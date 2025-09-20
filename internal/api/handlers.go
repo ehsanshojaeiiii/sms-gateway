@@ -40,6 +40,19 @@ func NewHandlers(logger *slog.Logger, store *messages.Store, billing *billing.Se
 }
 
 // SendMessage handles POST /v1/messages
+//
+//	@Summary		Send SMS
+//	@Description	Send SMS message (regular, OTP, or Express)
+//	@Tags			Messages
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		messages.SendRequest	true	"SMS request"
+//	@Success		200		{object}	messages.SendResponse	"OTP delivered immediately"
+//	@Success		202		{object}	messages.SendResponse	"Message queued"
+//	@Failure		400		{object}	map[string]string		"Bad request"
+//	@Failure		402		{object}	map[string]interface{}	"Insufficient credits"
+//	@Failure		503		{object}	map[string]string		"OTP delivery failed"
+//	@Router			/v1/messages [post]
 func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 	var req messages.SendRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -205,6 +218,16 @@ func (h *Handlers) ListMessages(c *fiber.Ctx) error {
 }
 
 // GetClientInfo handles GET /v1/me
+//
+//	@Summary		Get client info
+//	@Description	Get client credit balance and information
+//	@Tags			Client
+//	@Produce		json
+//	@Param			client_id	query		string					true	"Client ID"
+//	@Success		200			{object}	map[string]interface{}	"Client info"
+//	@Failure		400			{object}	map[string]string		"Bad request"
+//	@Failure		500			{object}	map[string]string		"Internal error"
+//	@Router			/v1/me [get]
 func (h *Handlers) GetClientInfo(c *fiber.Ctx) error {
 	clientID, err := uuid.Parse(c.Query("client_id", ""))
 	if err != nil {
@@ -220,6 +243,13 @@ func (h *Handlers) GetClientInfo(c *fiber.Ctx) error {
 }
 
 // Health endpoints
+//
+//	@Summary		Health check
+//	@Description	Basic health check endpoint
+//	@Tags			System
+//	@Produce		json
+//	@Success		200	{object}	map[string]interface{}	"Health status"
+//	@Router			/health [get]
 func (h *Handlers) Health(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": "ok", "time": time.Now().Unix()})
 }

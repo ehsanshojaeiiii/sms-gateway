@@ -1,0 +1,151 @@
+basePath: /
+definitions:
+  messages.SendRequest:
+    properties:
+      client_id:
+        type: string
+      express:
+        type: boolean
+      from:
+        type: string
+      otp:
+        type: boolean
+      reference:
+        type: string
+      text:
+        type: string
+      to:
+        type: string
+    required:
+    - client_id
+    - from
+    - to
+    type: object
+  messages.SendResponse:
+    properties:
+      message_id:
+        type: string
+      otp_code:
+        type: string
+      status:
+        $ref: '#/definitions/messages.Status'
+    type: object
+  messages.Status:
+    enum:
+    - QUEUED
+    - SENDING
+    - SENT
+    - DELIVERED
+    - FAILED_TEMP
+    - FAILED_PERM
+    - CANCELLED
+    type: string
+    x-enum-varnames:
+    - StatusQueued
+    - StatusSending
+    - StatusSent
+    - StatusDelivered
+    - StatusFailedTemp
+    - StatusFailedPerm
+    - StatusCancelled
+host: localhost:8080
+info:
+  contact:
+    name: SMS Gateway Support
+  description: Production-ready SMS Gateway service implementing all PDF requirements
+  license:
+    name: MIT
+  termsOfService: http://swagger.io/terms/
+  title: SMS Gateway API
+  version: "1.0"
+paths:
+  /health:
+    get:
+      description: Basic health check endpoint
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Health status
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Health check
+      tags:
+      - System
+  /v1/me:
+    get:
+      description: Get client credit balance and information
+      parameters:
+      - description: Client ID
+        in: query
+        name: client_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Client info
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get client info
+      tags:
+      - Client
+  /v1/messages:
+    post:
+      consumes:
+      - application/json
+      description: Send SMS message (regular, OTP, or Express)
+      parameters:
+      - description: SMS request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/messages.SendRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OTP delivered immediately
+          schema:
+            $ref: '#/definitions/messages.SendResponse'
+        "202":
+          description: Message queued
+          schema:
+            $ref: '#/definitions/messages.SendResponse'
+        "400":
+          description: Bad request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "402":
+          description: Insufficient credits
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: OTP delivery failed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send SMS
+      tags:
+      - Messages
+swagger: "2.0"

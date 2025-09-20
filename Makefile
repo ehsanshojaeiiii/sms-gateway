@@ -37,6 +37,11 @@ api-test: ## Test API endpoints
 		-d '{"client_id":"550e8400-e29b-41d4-a716-446655440000","to":"+1234567890","from":"TEST","text":"Hello SMS Gateway!"}' || echo "❌ SMS send failed"
 	@echo -e "\n✅ API tests complete"
 
+docs: ## Generate swagger documentation
+	@echo "📚 Generating Swagger docs..."
+	@~/go/bin/swag init -g cmd/api/main.go -o docs
+	@echo "✅ Swagger docs generated at /swagger/"
+
 build: ## Build binaries
 	@echo "🔨 Building SMS Gateway..."
 	@go build -o api ./cmd/api

@@ -1,3 +1,13 @@
+// SMS Gateway API
+//
+//	@title			SMS Gateway API
+//	@version		1.0
+//	@description	Production-ready SMS Gateway service implementing all PDF requirements
+//	@termsOfService	http://swagger.io/terms/
+//	@contact.name	SMS Gateway Support
+//	@license.name	MIT
+//	@host			localhost:8080
+//	@BasePath		/
 package main
 
 import (
