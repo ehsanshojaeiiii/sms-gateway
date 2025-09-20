@@ -48,16 +48,16 @@ func SetupRoutes(app *fiber.App, logger *slog.Logger, handlers *Handlers) {
 	// Handle 404 for all other routes
 	app.Use(func(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{
-			"error": "Not Found",
+			"error":   "Not Found",
 			"message": "The requested endpoint does not exist",
 			"available_endpoints": fiber.Map{
-				"health": "GET /health",
-				"docs": "GET /docs", 
-				"swagger": "GET /swagger/",
-				"send_sms": "POST /v1/messages",
-				"get_message": "GET /v1/messages/:id",
+				"health":        "GET /health",
+				"docs":          "GET /docs",
+				"swagger":       "GET /swagger/",
+				"send_sms":      "POST /v1/messages",
+				"get_message":   "GET /v1/messages/:id",
 				"list_messages": "GET /v1/messages?client_id=uuid",
-				"client_info": "GET /v1/me?client_id=uuid",
+				"client_info":   "GET /v1/me?client_id=uuid",
 			},
 		})
 	})

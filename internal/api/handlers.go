@@ -229,9 +229,13 @@ func (h *Handlers) ListMessages(c *fiber.Ctx) error {
 //	@Failure		500			{object}	map[string]string		"Internal error"
 //	@Router			/v1/me [get]
 func (h *Handlers) GetClientInfo(c *fiber.Ctx) error {
-	clientID, err := uuid.Parse(c.Query("client_id", ""))
+	clientIDStr := c.Query("client_id")
+	if clientIDStr == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "client_id query parameter required"})
+	}
+	clientID, err := uuid.Parse(clientIDStr)
 	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "client_id required"})
+		return c.Status(400).JSON(fiber.Map{"error": "invalid client_id format"})
 	}
 
 	credits, err := h.billing.GetCredits(c.Context(), clientID)
