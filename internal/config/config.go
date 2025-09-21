@@ -16,12 +16,6 @@ type Config struct {
 	// Database
 	PostgresURL string `envconfig:"POSTGRES_URL" required:"true"`
 
-	// Redis
-	RedisURL string `envconfig:"REDIS_URL" required:"true"`
-
-	// NATS
-	NATSURL string `envconfig:"NATS_URL" required:"true"`
-
 	// Billing
 	PricePerPartCents     int64 `envconfig:"PRICE_PER_PART_CENTS" default:"5"`
 	ExpressSurchargeCents int64 `envconfig:"EXPRESS_SURCHARGE_CENTS" default:"2"`

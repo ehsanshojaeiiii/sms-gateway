@@ -22,7 +22,6 @@ import (
 	"sms-gateway/internal/db"
 	"sms-gateway/internal/delivery"
 	"sms-gateway/internal/messages"
-	"sms-gateway/internal/messaging/nats"
 	"sms-gateway/internal/otp"
 	"sms-gateway/internal/providers/mock"
 	"syscall"
@@ -52,31 +51,17 @@ func main() {
 		logger.Warn("Failed to run migrations", "error", err)
 	}
 
-	// Redis
-	redis, err := db.NewRedis(ctx, cfg.RedisURL)
-	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
-	}
-	defer redis.Close()
-
-	// NATS
-	queue, err := nats.NewQueue(cfg.NATSURL, logger)
-	if err != nil {
-		log.Fatalf("Failed to connect to NATS: %v", err)
-	}
-	defer queue.Close()
-
 	// Services
 	store := messages.NewStore(database, logger)
 	billingService := billing.NewService(database, logger)
 	deliveryService := delivery.NewService(logger, store, billingService)
 
-	// SMS Provider and OTP service for delivery guarantee
+	// SMS Provider and OTP service
 	provider := mock.NewProvider()
 	otpService := otp.NewOTPService(logger, provider)
 
 	// Handlers
-	handlers := api.NewHandlers(logger, store, billingService, queue, deliveryService, otpService, cfg.PricePerPartCents, cfg.ExpressSurchargeCents)
+	handlers := api.NewHandlers(logger, store, billingService, deliveryService, otpService, cfg.PricePerPartCents, cfg.ExpressSurchargeCents)
 
 	// App
 	app := fiber.New(fiber.Config{

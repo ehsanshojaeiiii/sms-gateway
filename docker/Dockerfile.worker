@@ -1,10 +1,15 @@
 # Build stage
 FROM golang:1.25.1-alpine AS builder
 
+# Install git which is required for go mod download with direct proxy
+RUN apk add --no-cache git
+
 WORKDIR /app
 
 # Copy go mod files
 COPY go.mod go.sum ./
+# Set GOPROXY to bypass proxy issues
+ENV GOPROXY=direct
 RUN go mod download
 
 # Copy source code

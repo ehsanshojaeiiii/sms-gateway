@@ -7,7 +7,6 @@ import (
 	"sms-gateway/internal/billing"
 	"sms-gateway/internal/delivery"
 	"sms-gateway/internal/messages"
-	"sms-gateway/internal/messaging/nats"
 	"sms-gateway/internal/otp"
 	"strings"
 	"time"
@@ -20,19 +19,17 @@ type Handlers struct {
 	logger       *slog.Logger
 	store        *messages.Store
 	billing      *billing.Service
-	queue        *nats.Queue
 	delivery     *delivery.Service
 	otpService   *otp.OTPService
 	pricePerPart int64
 	expressCost  int64
 }
 
-func NewHandlers(logger *slog.Logger, store *messages.Store, billing *billing.Service, queue *nats.Queue, delivery *delivery.Service, otpService *otp.OTPService, pricePerPart, expressCost int64) *Handlers {
+func NewHandlers(logger *slog.Logger, store *messages.Store, billing *billing.Service, delivery *delivery.Service, otpService *otp.OTPService, pricePerPart, expressCost int64) *Handlers {
 	return &Handlers{
 		logger:       logger,
 		store:        store,
 		billing:      billing,
-		queue:        queue,
 		delivery:     delivery,
 		otpService:   otpService,
 		pricePerPart: pricePerPart,
@@ -104,24 +101,13 @@ func (h *Handlers) SendMessage(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "internal error"})
 	}
 
-	// Actually hold credits for the real message
+	// Hold credits for the message
 	if _, err := h.billing.HoldCredits(c.Context(), req.ClientID, msg.ID, cost); err != nil {
 		h.store.Delete(c.Context(), msg.ID)
 		return c.Status(402).JSON(fiber.Map{"error": "insufficient credits", "required": cost})
 	}
 
-	// Publish message to NATS for worker processing
-	if err := h.queue.PublishSendJob(c.Context(), msg.ID, 1); err != nil {
-		h.logger.Error("failed to publish message to NATS", "error", err, "message_id", msg.ID)
-		// If NATS fails, release credits and mark message as failed
-		h.billing.ReleaseCredits(c.Context(), msg.ID)
-		h.store.UpdateStatus(c.Context(), msg.ID, messages.StatusFailedPerm, nil, &[]string{"NATS publish failed"}[0])
-		return c.Status(500).JSON(fiber.Map{"error": "failed to queue message"})
-	}
-
-	h.logger.Info("message published to NATS for processing", "id", msg.ID, "express", msg.Express)
-
-	h.logger.Info("message created", "id", msg.ID, "client", req.ClientID, "cost", cost)
+	h.logger.Info("Message queued", "id", msg.ID, "client", req.ClientID, "cost", cost)
 
 	return c.Status(202).JSON(&messages.SendResponse{
 		MessageID: msg.ID,

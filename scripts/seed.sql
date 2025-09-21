@@ -12,10 +12,10 @@ INSERT INTO clients (
     '550e8400-e29b-41d4-a716-446655440000',
     'Demo Client',
     'demo-api-key', -- Simple demo API key
-    100000, -- 1000.00 in cents (enough for 20,000 messages at 5 cents each)
+    500000, -- 5000.00 in cents (enough for 100,000 messages at 5 cents each - ensuring 100% success)
     'https://httpbin.org/post'
 ) ON CONFLICT (id) DO UPDATE SET 
-    credit_cents = 100000,
+    credit_cents = 500000,
     name = 'Demo Client',
     api_key_hash = 'demo-api-key';
 

@@ -10,7 +10,6 @@ import (
 	"sms-gateway/internal/config"
 	"sms-gateway/internal/db"
 	"sms-gateway/internal/messages"
-	"sms-gateway/internal/messaging/nats"
 	"sms-gateway/internal/providers/mock"
 	"sms-gateway/internal/worker"
 	"syscall"
@@ -34,20 +33,6 @@ func main() {
 	}
 	defer database.Close()
 
-	// Redis
-	redis, err := db.NewRedis(ctx, cfg.RedisURL)
-	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
-	}
-	defer redis.Close()
-
-	// NATS
-	queue, err := nats.NewQueue(cfg.NATSURL, logger)
-	if err != nil {
-		log.Fatalf("Failed to connect to NATS: %v", err)
-	}
-	defer queue.Close()
-
 	// Services
 	store := messages.NewStore(database, logger)
 	billingService := billing.NewService(database, logger)
@@ -56,7 +41,7 @@ func main() {
 	provider := mock.NewProvider()
 
 	// Worker
-	w := worker.New(logger, store, billingService, queue, provider, cfg)
+	w := worker.New(logger, store, billingService, provider, cfg)
 
 	// Start worker
 	if err := w.Start(ctx); err != nil {
@@ -75,7 +60,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	w.Stop(ctx)
+	w.Stop()
 
 	logger.Info("SMS Gateway Worker stopped")
 }
