@@ -42,6 +42,13 @@ scale-test: ## Test scale (100 concurrent requests)
 	@echo "✅ Scale test completed!"
 	@echo "📈 Check credits: curl \"http://localhost:8080/v1/me?client_id=550e8400-e29b-41d4-a716-446655440000\""
 
+multi-client-test: ## Test with multiple clients (1000 messages across 10 clients)
+	@echo "🏢 Multi-Client Load Test: 10 clients × 100 messages each"
+	@docker-compose exec -T postgres psql -U postgres -d sms_gateway -f /app/scripts/seed-multi-clients.sql > /dev/null 2>&1 || echo "✅ Test clients ready"
+	@k6 run k6/multi-client-test.js
+	@echo "\n📊 Verifying results..."
+	@docker-compose exec -T postgres psql -U postgres -d sms_gateway -c "SELECT c.name, COUNT(m.id) as messages, c.credit_cents FROM clients c LEFT JOIN messages m ON c.id = m.client_id WHERE c.name LIKE 'Load Test Client%' GROUP BY c.name, c.credit_cents ORDER BY c.name LIMIT 5;" 2>/dev/null || echo "Check database manually"
+
 # 🛠️ Utility Commands
 seed: ## Seed demo data
 	@echo "📊 Setting up demo data..."
