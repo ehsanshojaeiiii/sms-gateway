@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
@@ -20,6 +21,12 @@ func NewPostgres(ctx context.Context, url string) (*PostgresDB, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Configure connection pool for high concurrency
+	db.SetMaxOpenConns(100)                // Maximum number of open connections
+	db.SetMaxIdleConns(25)                 // Maximum number of idle connections
+	db.SetConnMaxLifetime(5 * time.Minute) // Connection lifetime
+	db.SetConnMaxIdleTime(2 * time.Minute) // Max idle time
 
 	if err := db.PingContext(ctx); err != nil {
 		return nil, err

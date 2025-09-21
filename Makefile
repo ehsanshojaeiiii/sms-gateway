@@ -49,10 +49,34 @@ multi-client-test: ## Test with multiple clients (1000 messages across 10 client
 	@echo "\n📊 Verifying results..."
 	@docker-compose exec -T postgres psql -U postgres -d sms_gateway -c "SELECT c.name, COUNT(m.id) as messages, c.credit_cents FROM clients c LEFT JOIN messages m ON c.id = m.client_id WHERE c.name LIKE 'Load Test Client%' GROUP BY c.name, c.credit_cents ORDER BY c.name LIMIT 5;" 2>/dev/null || echo "Check database manually"
 
+load-test-69k: ## Run 69K message load test (requires system running)
+	@echo "🚀 Starting 69K Load Test: 100 users for 10 minutes"
+	@echo "⚠️  This is an intensive test - ensure sufficient system resources"
+	@k6 run k6/load-test-69k.js
+	@echo "\n📊 Verifying results..."
+	@docker-compose exec -T postgres psql -U postgres -d sms_gateway -c "SELECT status, COUNT(*) FROM messages GROUP BY status;" 2>/dev/null || echo "Check database manually"
+
+fast-test: ## Run fast 20-second test
+	@echo "⚡ Fast 20-Second Test: Quick system validation"
+	@k6 run k6/fast-20s-test.js
+
+extreme-test: ## Extreme 20-second test (2,300 messages - 69k scaled down)
+	@echo "💥 Extreme Test: 50 users × ~46 messages = 2,300 SMS in 20s (115 SMS/sec)"
+	@echo "🎯 This is the 69k/10min test scaled to 20 seconds"
+	@k6 run k6/extreme-20s-test.js
+
 # 🛠️ Utility Commands
 seed: ## Seed demo data
 	@echo "📊 Setting up demo data..."
 	@docker-compose exec postgres psql -U postgres -d sms_gateway -f /app/scripts/seed.sql || echo "Database ready"
+
+seed-multi-clients: ## Seed 10 test clients for multi-client testing
+	@echo "🏢 Seeding 10 test clients..."
+	@docker-compose exec postgres psql -U postgres -d sms_gateway -f /app/scripts/seed-multi-clients.sql || echo "Multi-client data ready"
+
+seed-100-clients: ## Seed 100 test clients for massive load testing
+	@echo "💯 Seeding 100 test clients for massive load..."
+	@docker-compose exec postgres psql -U postgres -d sms_gateway -f /app/scripts/seed-100-clients.sql || echo "100-client data ready"
 
 stop: ## Stop services
 	@echo "🛑 Stopping services..."

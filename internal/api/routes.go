@@ -7,10 +7,12 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	fiberSwagger "github.com/swaggo/fiber-swagger"
+
+	"sms-gateway/internal/config"
 )
 
-func SetupRoutes(app *fiber.App, logger *slog.Logger, handlers *Handlers) {
-	SetupMiddleware(app, logger)
+func SetupRoutes(app *fiber.App, logger *slog.Logger, handlers *Handlers, cfg *config.Config) {
+	SetupMiddleware(app, logger, cfg)
 
 	// Health
 	app.Get("/health", handlers.Health)

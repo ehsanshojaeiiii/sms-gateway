@@ -20,6 +20,11 @@ type Config struct {
 	PricePerPartCents     int64 `envconfig:"PRICE_PER_PART_CENTS" default:"5"`
 	ExpressSurchargeCents int64 `envconfig:"EXPRESS_SURCHARGE_CENTS" default:"2"`
 
+	// Rate Limiting
+	RateLimitEnabled    bool `envconfig:"RATE_LIMIT_ENABLED" default:"false"`
+	RateLimitRPM        int  `envconfig:"RATE_LIMIT_RPM" default:"5000"`       // Requests per minute
+	RateLimitConcurrent int  `envconfig:"RATE_LIMIT_CONCURRENT" default:"100"` // Max concurrent requests
+
 	// Observability
 	LogLevel string `envconfig:"LOG_LEVEL" default:"info"`
 }

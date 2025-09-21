@@ -63,15 +63,34 @@ func main() {
 	// Handlers
 	handlers := api.NewHandlers(logger, store, billingService, deliveryService, otpService, cfg.PricePerPartCents, cfg.ExpressSurchargeCents)
 
-	// App
+	// App with high-concurrency configuration
 	app := fiber.New(fiber.Config{
+		// High concurrency settings
+		Concurrency:     256 * 1024, // 256K concurrent connections
+		ReadTimeout:     time.Second * 30,
+		WriteTimeout:    time.Second * 30,
+		IdleTimeout:     time.Second * 60,
+		ReadBufferSize:  8192,        // 8KB read buffer
+		WriteBufferSize: 8192,        // 8KB write buffer
+		BodyLimit:       1024 * 1024, // 1MB body limit
+
+		// Connection settings
+		DisableKeepalive:  false,
+		ReduceMemoryUsage: false, // Keep false for performance
+		Prefork:           false, // Single process for better debugging
+
+		// Error handling
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
-			logger.Error("Fiber error", "error", err)
+			logger.Error("Fiber error", "error", err, "path", c.Path(), "method", c.Method())
 			return c.Status(500).JSON(fiber.Map{"error": "Internal server error"})
 		},
+
+		// Disable server header for security
+		DisableDefaultDate:       false,
+		DisableHeaderNormalizing: false,
 	})
 
-	api.SetupRoutes(app, logger, handlers)
+	api.SetupRoutes(app, logger, handlers, cfg)
 
 	// Start server
 	go func() {
